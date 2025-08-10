@@ -1,6 +1,6 @@
 import { GRID_W, GRID_H, TILE, STARTING_MANA, COSTS, SPAWN_RATE, MAX_ADVENTURERS, POLITICAL_RAID_THRESHOLD, ECON_RAID_THRESHOLD, STORAGE_KEY, T, isWalkableType } from "./src/constants.js";
 import { MobRegistry, getMob, listMobs } from "./src/mobs.js";
-import { makeMember } from "./src/classes.js";
+import { makeMember, ClassRegistry } from "./src/classes.js";
 
 (() => {
   // ----- Config (migrated to modules) -----
@@ -23,7 +23,7 @@ import { makeMember } from "./src/classes.js";
 
   // Regular memory pool (they come back with learned maps)
   const REGULAR_POOL_SIZE = 3;
-  const RegularMemory = new Map(); // id -> {knowledge, exitKnown, exitPos}
+  const RegularMemory = new Map(); // id -> {knowledge, exitKnown, exitPos, members}
   const RegularRoster = []; // ids we cycle through
 
   // Grid & mob data
@@ -57,9 +57,9 @@ import { makeMember } from "./src/classes.js";
     partySelect: document.getElementById("partySelect"),
     cycleParty: document.getElementById("cycleParty"),
     clearMemory: document.getElementById("clearMemory"),
-  forgetSelected: document.getElementById("forgetSelected"),
-  highlightToggle: document.getElementById("highlightToggle"),
-  partyInspector: document.getElementById("partyInspector"),
+    forgetSelected: document.getElementById("forgetSelected"),
+    highlightToggle: document.getElementById("highlightToggle"),
+    partyInspector: document.getElementById("partyInspector"),
   };
 
   document.querySelectorAll('.toolbar button[data-tool]').forEach(b => {
@@ -76,7 +76,7 @@ import { makeMember } from "./src/classes.js";
   el.forgetSelected.onclick = () => forgetSelectedMemory();
   el.partySelect.onchange = () => updatePartyInspector();
   el.overlayToggle?.addEventListener("change", () => updatePartyInspector());
-  el.highlightToggle?.addEventListener("change", () => {});
+  el.highlightToggle?.addEventListener("change", () => { });
 
   const ctx = el.grid.getContext("2d");
 
@@ -136,6 +136,21 @@ import { makeMember } from "./src/classes.js";
     return src.map(row => row.map(c => ({ seen: !!c.seen, type: (c.type ?? -1), danger: (c.danger ?? 0), lastSeenTick: (c.lastSeenTick ?? 0) })));
   }
 
+  // Build a fresh member from a saved template (level/cls/trait), healed with full MP
+  function makeMemberFromTemplate(tmpl, spawnY) {
+    const { level, cls, trait } = tmpl || {};
+    const base = cls ? ClassRegistry.get(cls) : null;
+    if (!base) {
+      const m = makeMember(level || 1);
+      m.x = 1; m.y = spawnY; return m;
+    }
+    const scale = 1 + (level - 1) * 0.25;
+    const maxhp = Math.round(base.baseHp * scale);
+    const mp = Math.round(base.baseMp * scale);
+    return { hp: maxhp, maxhp, mp, cls, trait, level, x: 1, y: spawnY, loot: 0, bleeding: 0 };
+  }
+
+  // Reveal tiles around party members based on class bonuses (e.g., ranger)
   function reveal(party) {
     const base = 1;
     let bonus = 0;
@@ -169,7 +184,8 @@ import { makeMember } from "./src/classes.js";
         [...RegularMemory.entries()].map(([id, mem]) => [id, {
           knowledge: mem.knowledge,
           exitKnown: !!mem.exitKnown,
-          exitPos: mem.exitPos || null
+          exitPos: mem.exitPos || null,
+          members: Array.isArray(mem.members) ? mem.members : undefined,
         }])
       )
     };
@@ -191,7 +207,8 @@ import { makeMember } from "./src/classes.js";
           RegularMemory.set(id, {
             knowledge: copyKnowledge(mem.knowledge),
             exitKnown: !!mem.exitKnown,
-            exitPos: mem.exitPos ? { x: mem.exitPos.x, y: mem.exitPos.y } : null
+            exitPos: mem.exitPos ? { x: mem.exitPos.x, y: mem.exitPos.y } : null,
+            members: Array.isArray(mem.members) ? mem.members.filter(m => m && m.cls && m.level) : undefined,
           });
         });
       }
@@ -225,14 +242,8 @@ import { makeMember } from "./src/classes.js";
   function makeParty() {
     const regularSpawn = Math.random() < 0.6;
     const kind = regularSpawn ? PARTY_KIND.REGULAR : PARTY_KIND.TRAVELER;
-    const size = rnd(2, 4);
-    const members = Array.from({ length: size }, () => {
-      const level = rnd(1, 5);
-      const m = makeMember(level);
-      m.x = 1;
-      m.y = Math.floor(GRID_H / 2);
-      return m;
-    });
+    const spawnY = Math.floor(GRID_H / 2);
+    let members = [];
 
     let id;
     let knowledge, exitKnown = false, exitPos = null;
@@ -243,6 +254,9 @@ import { makeMember } from "./src/classes.js";
         knowledge = copyKnowledge(mem.knowledge);
         exitKnown = !!mem.exitKnown;
         exitPos = mem.exitPos ? { x: mem.exitPos.x, y: mem.exitPos.y } : null;
+        if (Array.isArray(mem.members) && mem.members.length > 0) {
+          members = mem.members.map(t => makeMemberFromTemplate(t, spawnY));
+        }
       } else {
         knowledge = blankKnowledge();
       }
@@ -258,7 +272,17 @@ import { makeMember } from "./src/classes.js";
       knowledge = blankKnowledge();
     }
 
-    const party = { id, kind, members, alive: true, ticks: 0, knowledge, exitKnown, exitPos, returned: false };
+    if (members.length === 0) {
+      const size = rnd(2, 4);
+      members = Array.from({ length: size }, () => {
+        const level = rnd(1, 5);
+        const m = makeMember(level);
+        m.x = 1; m.y = spawnY; return m;
+      });
+    }
+
+    const memberTemplates = members.map(m => ({ level: m.level, cls: m.cls, trait: m.trait }));
+    const party = { id, kind, members, memberTemplates, alive: true, ticks: 0, knowledge, exitKnown, exitPos, returned: false };
     log(`${kind} party ${id} enters.`);
     reveal(party);
     updatePartySelect();
@@ -411,6 +435,11 @@ import { makeMember } from "./src/classes.js";
     if (m.bleeding > 0) { m.bleeding--; m.hp -= 1; mana += 1; }
   }
 
+  // Apply just bleeding tick to a member (used for non-leaders)
+  function bleedTick(m) {
+    if (m.bleeding > 0) { m.bleeding--; m.hp -= 1; mana += 1; }
+  }
+
   function resolveDeath(party, m) {
     if (m.hp > 0) return false;
     killsLastWindow++;
@@ -425,6 +454,17 @@ import { makeMember } from "./src/classes.js";
     if (tileAt(m.x, m.y) === T.EXIT) {
       mana += Math.floor(m.loot / 2);
       party.returned = true;
+      return true;
+    }
+    return false;
+  }
+  // Party-level exit: if leader reaches exit, cash out all loot and remove the party
+  function maybePartyExit(party, leader) {
+    if (tileAt(leader.x, leader.y) === T.EXIT) {
+      const totalLoot = party.members.reduce((s, mm) => s + (mm.loot || 0), 0);
+      mana += Math.floor(totalLoot / 2);
+      party.returned = true;
+      party.alive = false;
       return true;
     }
     return false;
@@ -456,7 +496,7 @@ import { makeMember } from "./src/classes.js";
     } else if (options.length) {
       el.partySelect.value = options[0].id;
     }
-  updatePartyInspector();
+    updatePartyInspector();
   }
   function cyclePartySelection() {
     const opts = el.partySelect.options;
@@ -473,23 +513,35 @@ import { makeMember } from "./src/classes.js";
     }
     adventurers.forEach(p => {
       p.ticks++;
-      p.members.forEach(m => {
-        if (m.hp <= 0) return;
-        reveal(p);
-        const step = nextStepForMember(p, m);
-        if (step) { m.x = step.x; m.y = step.y; }
-        reveal(p);
-        interact(p, m);
-      });
+      // pick leader (first alive member)
+      const leader = p.members.find(m => m.hp > 0);
+      if (!leader) { p.alive = false; return; }
+      // Single step per party
+      reveal(p);
+      const step = nextStepForMember(p, leader);
+      if (step) {
+        p.members.forEach(m => { if (m.hp > 0) { m.x = step.x; m.y = step.y; } });
+      }
+      reveal(p);
+      // One interaction per party at leader tile
+      interact(p, leader);
+      // Bleed ticks for other alive members
+      p.members.forEach(m => { if (m !== leader && m.hp > 0) bleedTick(m); });
+
+      // deaths cleanup
       p.members = p.members.filter(m => {
         if (m.hp <= 0) {
           if (p.kind === PARTY_KIND.REGULAR) politicalRisk += 6;
           else politicalRisk += 2;
           return !resolveDeath(p, m);
         }
-        if (maybeExit(p, m)) { return false; }
         return true;
       });
+      // party-level exit
+      if (p.members.length > 0 && maybePartyExit(p, leader)) {
+        // remove all members on exit
+        p.members = [];
+      }
       if (p.members.length === 0) p.alive = false;
     });
     adventurers.forEach(p => {
@@ -498,7 +550,8 @@ import { makeMember } from "./src/classes.js";
         RegularMemory.set(p.id, {
           knowledge: copyKnowledge(p.knowledge),
           exitKnown: !!p.exitKnown,
-          exitPos: p.exitPos ? { x: p.exitPos.x, y: p.exitPos.y } : null
+          exitPos: p.exitPos ? { x: p.exitPos.x, y: p.exitPos.y } : null,
+          members: Array.isArray(p.memberTemplates) ? p.memberTemplates : p.members.map(m => ({ level: m.level, cls: m.cls, trait: m.trait })),
         });
       }
     });
@@ -603,6 +656,14 @@ import { makeMember } from "./src/classes.js";
       list.appendChild(row);
     });
     container.appendChild(list);
+
+    // If viewing saved memory, render saved roster summary
+    if (!party && mem && Array.isArray(mem.members)) {
+      const roster = document.createElement("div");
+      roster.style.marginTop = "6px";
+      roster.textContent = `Saved roster: ${mem.members.map((t, i) => `#${i + 1} L${t.level} ${t.cls} (${t.trait})`).join(", ")}`;
+      container.appendChild(roster);
+    }
   }
 
   function generateCultOffer() {
@@ -669,42 +730,40 @@ import { makeMember } from "./src/classes.js";
         if (t === T.EXIT) { drawDot(x, y, "#b084ff"); }
       }
     }
-    // adventurers
+    // adventurers rendered as a single marker per party
     const selectedId = el.partySelect.value;
     const highlight = !!el.highlightToggle?.checked;
     adventurers.forEach(p => {
-      p.members.forEach(m => {
-        const isSelected = highlight && p.id === selectedId;
-        ctx.fillStyle = isSelected ? "#ffffff" : "#9ce2ff";
-        ctx.fillRect(m.x * TILE + 8, m.y * TILE + 8, TILE - 16, TILE - 16);
-        if (isSelected) {
-          // subtle outline
-          ctx.strokeStyle = "#ffd447";
-          ctx.lineWidth = 2;
-          ctx.strokeRect(m.x * TILE + 7, m.y * TILE + 7, TILE - 14, TILE - 14);
-        }
-      });
+      if (p.members.length === 0) return;
+      const leader = p.members[0];
+      const isSelected = highlight && p.id === selectedId;
+      ctx.fillStyle = isSelected ? "#ffffff" : "#9ce2ff";
+      ctx.fillRect(leader.x * TILE + 8, leader.y * TILE + 8, TILE - 16, TILE - 16);
+      if (isSelected) {
+        ctx.strokeStyle = "#ffd447";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(leader.x * TILE + 7, leader.y * TILE + 7, TILE - 14, TILE - 14);
+      }
     });
-    // draw names and health bars
+    // draw names and aggregated health bars
     adventurers.forEach(p => {
       if (p.members.length > 0) {
         const m0 = p.members[0];
         ctx.fillStyle = "#ffffff";
         ctx.font = "12px sans-serif";
         ctx.fillText(p.id, m0.x * TILE, m0.y * TILE - 2);
-      }
-      p.members.forEach(m => {
+
+        const totalHp = p.members.reduce((s, m) => s + Math.max(0, m.hp), 0);
+        const totalMax = p.members.reduce((s, m) => s + m.maxhp, 0);
+        const ratio = totalMax > 0 ? totalHp / totalMax : 0;
         const barWidth = TILE - 4;
-        const x0 = m.x * TILE + 2;
-        const y0 = m.y * TILE - 6;
+        const x0 = m0.x * TILE + 2;
+        const y0 = m0.y * TILE - 6;
         ctx.fillStyle = "#555";
         ctx.fillRect(x0, y0, barWidth, 4);
         ctx.fillStyle = "#f00";
-        ctx.fillRect(x0, y0, (m.hp / m.maxhp) * barWidth, 4);
-        ctx.fillStyle = "#fff";
-        ctx.font = "8px sans-serif";
-        ctx.fillText(`L${m.level}`, x0, y0 - 2);
-      });
+        ctx.fillRect(x0, y0, ratio * barWidth, 4);
+      }
     });
 
     // overlay: selected party knowledge

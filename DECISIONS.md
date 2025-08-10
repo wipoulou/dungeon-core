@@ -12,3 +12,10 @@ This file tracks major design and implementation decisions for the Dungeon Core 
 - Mob tiles now track type and HP per tile; regen respects mob type.
 
 Next: add UI to choose mob type to place; expose hooks for class/trait abilities in interactions.
+
+## 2025-08-10: Persist Regular party rosters
+
+- Extended Regulars memory to save a lightweight party roster template: each member's level, class, and trait.
+- When a Regular party re-enters later, they respawn with the same roster, fully healed (HP) and with fresh MP.
+- Memory format in localStorage now includes `members` array per party id. Backward compatible: absence of `members` falls back to random generation.
+- Party Inspector shows a "Saved roster" summary when viewing a memory-only party.
