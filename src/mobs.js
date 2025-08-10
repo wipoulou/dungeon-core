@@ -10,6 +10,7 @@ export const MobRegistry = new Map();
 //   maxHp: number,
 //   regen: number,
 //   onHit?: (ctx) => void, // optional hooks later
+//   attacks?: Array<{ name: string, min: number, max: number }>
 // }
 
 export function defineMob(def) {
@@ -26,6 +27,6 @@ export function listMobs() {
 }
 
 // Default/base mobs
-defineMob({ id: "slime", name: "Slime", color: "#47ff88", maxHp: 20, regen: 1 });
-defineMob({ id: "goblin", name: "Goblin", color: "#8cff47", maxHp: 28, regen: 0 });
-defineMob({ id: "sentry", name: "Sentry", color: "#47c6ff", maxHp: 16, regen: 2 });
+defineMob({ id: "slime", name: "Slime", color: "#47ff88", maxHp: 20, regen: 1, attacks: [{ name: "Pseudopod", min: 3, max: 6 }] });
+defineMob({ id: "goblin", name: "Goblin", color: "#8cff47", maxHp: 28, regen: 0, attacks: [{ name: "Slash", min: 4, max: 8 }, { name: "Stab", min: 5, max: 9 }] });
+defineMob({ id: "sentry", name: "Sentry", color: "#47c6ff", maxHp: 16, regen: 2, attacks: [{ name: "Zap", min: 3, max: 7 }] });

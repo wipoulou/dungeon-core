@@ -1,6 +1,6 @@
 import { GRID_W, GRID_H, TILE, STARTING_MANA, COSTS, SPAWN_RATE, MAX_ADVENTURERS, POLITICAL_RAID_THRESHOLD, ECON_RAID_THRESHOLD, STORAGE_KEY, T, isWalkableType } from "./src/constants.js";
 import { MobRegistry, getMob, listMobs } from "./src/mobs.js";
-import { makeMember, ClassRegistry } from "./src/classes.js";
+import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
 
 (() => {
   // ----- Config (migrated to modules) -----
@@ -31,6 +31,8 @@ import { makeMember, ClassRegistry } from "./src/classes.js";
   // mobHp and mobType per tile for typed mobs
   const mobHp = Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => 0));
   const mobType = Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => null)); // string mob id
+  // mob respawn timers (ticks until respawn), 0 when not pending
+  const mobRespawn = Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => 0));
 
   // Pre-place entrance + exit
   grid[Math.floor(GRID_H / 2)][1] = T.ENTRANCE;
@@ -108,13 +110,14 @@ import { makeMember, ClassRegistry } from "./src/classes.js";
       if (tool === "room") { grid[y][x] = T.ROOM; }
       else if (tool === "mob") {
         if (grid[y][x] === T.ROOM) {
-          // Pick first registered mob type for now
+          // Pick random registered mob type
           const mobDefs = listMobs();
-          const chosen = mobDefs[0];
+          const chosen = mobDefs[Math.floor(Math.random() * mobDefs.length)];
           if (chosen) {
             grid[y][x] = T.MOB;
             mobType[y][x] = chosen.id;
             mobHp[y][x] = chosen.maxHp;
+            mobRespawn[y][x] = 0;
           }
         }
       }
@@ -127,6 +130,19 @@ import { makeMember, ClassRegistry } from "./src/classes.js";
   // ----- Adventurers -----
   const PARTY_KIND = { REGULAR: "Regulars", TRAVELER: "Traveler" };
   // class/traits are now provided by registry in src/classes.js
+
+  // --- Combat config ---
+  const MOB_RESPAWN_DELAY = 8; // ticks
+  const MOB_RESPAWN_COST_FRAC = 0.5; // fraction of COSTS.mob mana to respawn
+
+  function pickSkill(m) {
+    const classSkills = getClassSkills(m.cls);
+    const skills = classSkills.length ? classSkills : [{ name: "Strike", type: "phys", min: 4, max: 7, cost: 0 }];
+    // prefer the stronger skill if affordable, else basic
+    const strong = skills[1];
+    if (strong && m.mp >= strong.cost) return strong;
+    return skills[0];
+  }
 
   function blankKnowledge() {
     return Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => ({ seen: false, type: -1, danger: 0, lastSeenTick: 0 })));
@@ -282,7 +298,7 @@ import { makeMember, ClassRegistry } from "./src/classes.js";
     }
 
     const memberTemplates = members.map(m => ({ level: m.level, cls: m.cls, trait: m.trait }));
-    const party = { id, kind, members, memberTemplates, alive: true, ticks: 0, knowledge, exitKnown, exitPos, returned: false };
+    const party = { id, kind, members, memberTemplates, alive: true, ticks: 0, knowledge, exitKnown, exitPos, returned: false, lastPos: { x: 1, y: spawnY } };
     log(`${kind} party ${id} enters.`);
     reveal(party);
     updatePartySelect();
@@ -411,19 +427,7 @@ import { makeMember, ClassRegistry } from "./src/classes.js";
       if (Math.random() < 0.15) { grid[m.y][m.x] = T.ROOM; }
     }
     if (t === T.MOB) {
-      const id = mobType[m.y][m.x] || "slime";
-      const def = getMob(id) || { maxHp: 20 };
-      const dmgToMob = rnd(4, 10);
-      mobHp[m.y][m.x] -= dmgToMob;
-      particles.push({ x: m.x, y: m.y, life: 12, color: "#7fffd4" });
-      if (mobHp[m.y][m.x] <= 0) {
-        grid[m.y][m.x] = T.ROOM;
-        mobType[m.y][m.x] = null;
-        mana += 5;
-        particles.push({ x: m.x, y: m.y, life: 14, color: "#ff8aa8" });
-      } else {
-        // optional: bleed retaliation could go here based on def
-      }
+      resolveCombatAt(party, m.x, m.y);
     }
     if (t === T.TRAP && Math.random() < 0.35) {
       const dmg = rnd(6, 12);
@@ -433,6 +437,105 @@ import { makeMember, ClassRegistry } from "./src/classes.js";
       if (Math.random() < 0.1) grid[m.y][m.x] = T.ROOM;
     }
     if (m.bleeding > 0) { m.bleeding--; m.hp -= 1; mana += 1; }
+  }
+  function combatFleeChance(party, mobDef) {
+    const avgHpPct = party.members.length ? party.members.reduce((s, mm) => s + Math.max(0, mm.hp / mm.maxhp), 0) / party.members.length : 0;
+    let chance = 0.25;
+    if (party.members.some(mm => mm.cls === "ranger")) chance += 0.15;
+    if (party.members.some(mm => mm.cls === "assassin")) chance += 0.1;
+    if (avgHpPct < 0.5) chance += 0.15; // more desperate when hurt
+    chance = Math.max(0.05, Math.min(0.85, chance));
+    return chance;
+  }
+
+  function resolveCombatAt(party, x, y) {
+    const mobId = mobType[y][x];
+    const def = getMob(mobId);
+    if (!def) return;
+
+    // Optionally attempt flee back to lastPos
+    const attemptFlee = () => {
+      const ch = combatFleeChance(party, def);
+      if (Math.random() < ch && party.lastPos) {
+        log(`[Combat] ${party.id} flees from ${def.name} to (${party.lastPos.x},${party.lastPos.y}).`);
+        party.members.forEach(m => { m.x = party.lastPos.x; m.y = party.lastPos.y; });
+        return true;
+      }
+      return false;
+    };
+
+    // Try to flee if badly hurt; otherwise 15% chance
+    const avgHpPct = party.members.length ? party.members.reduce((s, mm) => s + Math.max(0, mm.hp / mm.maxhp), 0) / party.members.length : 0;
+    if (avgHpPct < 0.4 || Math.random() < 0.15) {
+      if (attemptFlee()) return;
+      log(`[Combat] ${party.id} failed to flee!`);
+    }
+
+    log(`[Combat] ${party.id} engages ${def.name} at (${x},${y}).`);
+
+    let mobCurrentHp = mobHp[y][x];
+    const maxRounds = 12;
+    for (let round = 1; round <= maxRounds; round++) {
+      // party turn
+      for (const m of party.members) {
+        if (m.hp <= 0) continue;
+        const skill = pickSkill(m);
+        if (skill.type === "heal") {
+          if (m.mp >= skill.cost) {
+            m.mp -= skill.cost;
+            const target = party.members.reduce((best, mm) => (mm.hp / mm.maxhp) < (best.hp / best.maxhp) ? mm : best, party.members[0]);
+            const heal = rnd(skill.min, skill.max);
+            const old = target.hp;
+            target.hp = Math.min(target.maxhp, target.hp + heal);
+            log(`[Combat] ${party.id} ${m.cls} casts ${skill.name} on ${target.cls} (+${target.hp - old} HP).`);
+          }
+          continue;
+        }
+        if (m.mp < skill.cost) {
+          // fallback to basic if insufficient MP
+          const basic = { name: "Strike", type: "phys", min: 3, max: 6, cost: 0 };
+          const dmg = rnd(basic.min, basic.max);
+          mobCurrentHp -= dmg;
+          log(`[Combat] ${party.id} ${m.cls} uses ${basic.name} (-${dmg} HP to ${def.name}).`);
+        } else {
+          m.mp -= skill.cost;
+          const dmg = rnd(skill.min, skill.max);
+          mobCurrentHp -= dmg;
+          log(`[Combat] ${party.id} ${m.cls} uses ${skill.name} (-${dmg} HP to ${def.name}).`);
+        }
+        if (mobCurrentHp <= 0) break;
+      }
+      if (mobCurrentHp <= 0) break;
+
+      // mob turn: pick a random alive member
+      const target = party.members.filter(mm => mm.hp > 0)[Math.floor(Math.random() * party.members.filter(mm => mm.hp > 0).length)];
+      if (!target) break;
+      const mobAtk = (def.attacks && def.attacks.length) ? def.attacks[Math.floor(Math.random() * def.attacks.length)] : { name: def.name + " Hit", min: 4, max: 8 };
+      const dmgToMember = rnd(mobAtk.min, mobAtk.max);
+      target.hp -= dmgToMember;
+      mana += dmgToMember; // dungeon gains mana when adventurers lose HP
+      log(`[Combat] ${def.name} uses ${mobAtk.name} on ${target.cls} (-${dmgToMember} HP).`);
+      // party wipe check
+      if (!party.members.some(mm => mm.hp > 0)) break;
+    }
+
+    // resolve outcomes
+    if (mobCurrentHp <= 0) {
+      log(`[Combat] ${def.name} is defeated.`);
+      grid[y][x] = T.ROOM;
+      mobType[y][x] = null;
+      mobHp[y][x] = 0;
+      mobRespawn[y][x] = MOB_RESPAWN_DELAY;
+      mana += 5; // reward for kill
+      particles.push({ x, y, life: 14, color: "#ff8aa8" });
+      return;
+    }
+
+    if (!party.members.some(mm => mm.hp > 0)) {
+      log(`[Combat] ${party.id} is wiped out by ${def.name}.`);
+      // mark dead; members will be removed in the cleanup below
+      return;
+    }
   }
 
   // Apply just bleeding tick to a member (used for non-leaders)
@@ -520,6 +623,8 @@ import { makeMember, ClassRegistry } from "./src/classes.js";
       reveal(p);
       const step = nextStepForMember(p, leader);
       if (step) {
+        // remember last position for flee
+        p.lastPos = { x: leader.x, y: leader.y };
         p.members.forEach(m => { if (m.hp > 0) { m.x = step.x; m.y = step.y; } });
       }
       reveal(p);
@@ -585,6 +690,23 @@ import { makeMember, ClassRegistry } from "./src/classes.js";
           if (!def) continue;
           if (mobHp[y][x] < def.maxHp) {
             mobHp[y][x] = Math.min(def.maxHp, mobHp[y][x] + (def.regen || 0));
+          }
+        } else if (mobRespawn[y][x] > 0) {
+          mobRespawn[y][x]--;
+          if (mobRespawn[y][x] <= 0) {
+            const cost = Math.floor(COSTS.mob * MOB_RESPAWN_COST_FRAC);
+            const mobDefs = listMobs();
+            const chosen = mobDefs[Math.floor(Math.random() * mobDefs.length)];
+            if (mana >= cost && chosen && grid[y][x] === T.ROOM) {
+              mana -= cost;
+              grid[y][x] = T.MOB;
+              mobType[y][x] = chosen.id;
+              mobHp[y][x] = chosen.maxHp;
+              log(`[Respawn] ${chosen.name} returns at (${x},${y}). (-${cost} mana)`);
+            } else {
+              // retry next tick
+              mobRespawn[y][x] = 1;
+            }
           }
         }
       }
@@ -851,6 +973,4 @@ import { makeMember, ClassRegistry } from "./src/classes.js";
   updateUI();
   loop();
   render();
-  log("v2.2: Overlay of a selected party's known map (toggle in Debug) + Regular memory persisted to localStorage.");
-  log("v2.3: Party Inspector + richer memory with staleness shading and per-party forget.");
 })();
