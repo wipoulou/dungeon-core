@@ -1,17 +1,9 @@
-(() => {
-  // ----- Config -----
-  const GRID_W = 24;
-  const GRID_H = 16;
-  const TILE = 32;
-  const STARTING_MANA = 100;
-  const COSTS = { room: 5, mob: 15, trap: 20, loot: 10 };
-  const SPAWN_RATE = 16; // ticks between spawns (lower spawn frequency)
-  const MAX_ADVENTURERS = 6; // lower max groups
-  const POLITICAL_RAID_THRESHOLD = 100;
-  const ECON_RAID_THRESHOLD = 100;
+import { GRID_W, GRID_H, TILE, STARTING_MANA, COSTS, SPAWN_RATE, MAX_ADVENTURERS, POLITICAL_RAID_THRESHOLD, ECON_RAID_THRESHOLD, STORAGE_KEY, T, isWalkableType } from "./src/constants.js";
+import { MobRegistry, getMob, listMobs } from "./src/mobs.js";
+import { makeMember } from "./src/classes.js";
 
-  // Storage
-  const STORAGE_KEY = "dc_regular_memory_v1";
+(() => {
+  // ----- Config (migrated to modules) -----
 
   // ----- State -----
   let tick = 0;
@@ -34,12 +26,11 @@
   const RegularMemory = new Map(); // id -> {knowledge, exitKnown, exitPos}
   const RegularRoster = []; // ids we cycle through
 
-  // Tile types
-  const T = { WALL: 0, ROOM: 1, MOB: 2, TRAP: 3, LOOT: 4, ENTRANCE: 5, EXIT: 6 };
+  // Grid & mob data
   const grid = Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => T.WALL));
-  const mobMaxHp = 20;
-  const mobRegenRate = 1;
+  // mobHp and mobType per tile for typed mobs
   const mobHp = Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => 0));
+  const mobType = Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => null)); // string mob id
 
   // Pre-place entrance + exit
   grid[Math.floor(GRID_H / 2)][1] = T.ENTRANCE;
@@ -110,8 +101,14 @@
       if (tool === "room") { grid[y][x] = T.ROOM; }
       else if (tool === "mob") {
         if (grid[y][x] === T.ROOM) {
-          grid[y][x] = T.MOB;
-          mobHp[y][x] = mobMaxHp;
+          // Pick first registered mob type for now
+          const mobDefs = listMobs();
+          const chosen = mobDefs[0];
+          if (chosen) {
+            grid[y][x] = T.MOB;
+            mobType[y][x] = chosen.id;
+            mobHp[y][x] = chosen.maxHp;
+          }
         }
       }
       else if (tool === "trap") { if (grid[y][x] === T.ROOM) grid[y][x] = T.TRAP; }
@@ -122,8 +119,7 @@
 
   // ----- Adventurers -----
   const PARTY_KIND = { REGULAR: "Regulars", TRAVELER: "Traveler" };
-  const CLASSES = ["warrior", "ranger", "assassin", "mage", "healer", "bard", "engineer"];
-  const TRAITS = ["Mana Sink", "Trap Enthusiast", "Show-off", "Efficient Caster"];
+  // class/traits are now provided by registry in src/classes.js
 
   function blankKnowledge() {
     return Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => ({ seen: false, type: -1, danger: 0 })));
@@ -206,17 +202,13 @@
     const regularSpawn = Math.random() < 0.6;
     const kind = regularSpawn ? PARTY_KIND.REGULAR : PARTY_KIND.TRAVELER;
     const size = rnd(2, 4);
-    const members = Array.from({ length: size }, () => ({
-      hp: 40,
-      maxhp: 40,
-      mp: rnd(10, 25),
-      cls: CLASSES[rnd(0, CLASSES.length - 1)],
-      trait: TRAITS[rnd(0, TRAITS.length - 1)],
-      level: rnd(1, 5),
-      x: 1, y: Math.floor(GRID_H / 2),
-      loot: 0,
-      bleeding: 0,
-    }));
+    const members = Array.from({ length: size }, () => {
+      const level = rnd(1, 5);
+      const m = makeMember(level);
+      m.x = 1;
+      m.y = Math.floor(GRID_H / 2);
+      return m;
+    });
 
     let id;
     let knowledge, exitKnown = false, exitPos = null;
@@ -251,7 +243,6 @@
 
   // ----- Pathing -----
   function tileAt(x, y) { return grid[y][x]; }
-  function isWalkableType(t) { return t === T.ROOM || t === T.MOB || t === T.TRAP || t === T.LOOT || t === T.ENTRANCE || t === T.EXIT; }
 
   function aStar(party, start, goal, allowDanger = true) {
     const { knowledge } = party;
@@ -372,13 +363,18 @@
       if (Math.random() < 0.15) { grid[m.y][m.x] = T.ROOM; }
     }
     if (t === T.MOB) {
+      const id = mobType[m.y][m.x] || "slime";
+      const def = getMob(id) || { maxHp: 20 };
       const dmgToMob = rnd(4, 10);
       mobHp[m.y][m.x] -= dmgToMob;
       particles.push({ x: m.x, y: m.y, life: 12, color: "#7fffd4" });
       if (mobHp[m.y][m.x] <= 0) {
         grid[m.y][m.x] = T.ROOM;
+        mobType[m.y][m.x] = null;
         mana += 5;
         particles.push({ x: m.x, y: m.y, life: 14, color: "#ff8aa8" });
+      } else {
+        // optional: bleed retaliation could go here based on def
       }
     }
     if (t === T.TRAP && Math.random() < 0.35) {
@@ -508,11 +504,15 @@
     }
     if (killBoostActive > 0) killBoostActive--;
 
-    // passive mob regeneration
+    // passive mob regeneration (typed)
     for (let y = 0; y < GRID_H; y++) {
       for (let x = 0; x < GRID_W; x++) {
-        if (grid[y][x] === T.MOB && mobHp[y][x] < mobMaxHp) {
-          mobHp[y][x] = Math.min(mobMaxHp, mobHp[y][x] + mobRegenRate);
+        if (grid[y][x] === T.MOB) {
+          const def = getMob(mobType[y][x] || "slime");
+          if (!def) continue;
+          if (mobHp[y][x] < def.maxHp) {
+            mobHp[y][x] = Math.min(def.maxHp, mobHp[y][x] + (def.regen || 0));
+          }
         }
       }
     }
@@ -585,7 +585,10 @@
           [T.EXIT]: "#231c38",
         }[t];
         ctx.fillRect(x * TILE, y * TILE, TILE - 1, TILE - 1);
-        if (t === T.MOB) { drawDot(x, y, "#47ff88"); }
+        if (t === T.MOB) {
+          const def = getMob(mobType[y][x] || "slime");
+          drawDot(x, y, def?.color || "#47ff88");
+        }
         if (t === T.TRAP) { drawDot(x, y, "#ff5a47"); }
         if (t === T.LOOT) { drawDot(x, y, "#ffd447"); }
         if (t === T.ENTRANCE) { drawDot(x, y, "#7cc1ff"); }
