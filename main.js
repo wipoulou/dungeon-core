@@ -134,22 +134,39 @@ const BLINK_HIGH_PHASE = 2;
 
   function hasPathIfRemoved(rx, ry) {
     const { ent, ext } = findEntranceExit();
-    if (!ent || !ext) return false; // fail-closed: missing entrance/exit is invalid
-    // BFS from entrance to exit treating (rx,ry) as wall
-    const q = [ent];
-    const seen = new Set([`${ent.x},${ent.y}`]);
-    while (q.length) {
-      const cur = q.shift();
-      if (cur.x === ext.x && cur.y === ext.y) return true;
-      for (const [nx, ny] of neighbors(cur.x, cur.y)) {
-        if (nx === rx && ny === ry) continue; // pretend removed -> wall
-        const t = grid[ny][nx];
-        if (!isWalkableType(t)) continue;
-        const k = `${nx},${ny}`;
-        if (!seen.has(k)) { seen.add(k); q.push({ x: nx, y: ny }); }
+    if (!ent || !ext) return false; // fail-closed
+    // helper BFS from entrance, optionally skipping one tile as if it were a wall
+    function bfs(skipX = null, skipY = null) {
+      const q = [ent];
+      const seen = new Set([`${ent.x},${ent.y}`]);
+      while (q.length) {
+        const cur = q.shift();
+        // Early exit if we reach the exit position
+        if (cur.x === ext.x && cur.y === ext.y) break;
+        for (const [nx, ny] of neighbors(cur.x, cur.y)) {
+          if (skipX === nx && skipY === ny) continue;
+          const t = grid[ny][nx];
+          if (!isWalkableType(t)) continue;
+          const k = `${nx},${ny}`;
+          if (!seen.has(k)) { seen.add(k); q.push({ x: nx, y: ny }); }
+        }
       }
+      return seen;
     }
-    return false;
+    const reachableNow = bfs();
+    // Only allow removal if exit is currently reachable
+    if (!reachableNow.has(`${ext.x},${ext.y}`)) return false;
+    const reachableAfter = bfs(rx, ry);
+    // must still reach exit
+    if (!reachableAfter.has(`${ext.x},${ext.y}`)) return false;
+    // ensure we didn't strand any walkable tile that was reachable before (except the removed tile itself)
+    for (const key of reachableNow) {
+      if (key === `${rx},${ry}`) continue;
+      const [kx, ky] = key.split(",").map(Number);
+      if (!isWalkableType(grid[ky][kx])) continue; // ignore if it changed to non-walkable (shouldn't happen here)
+      if (!reachableAfter.has(key)) return false;
+    }
+    return true;
   }
 
   // ----- Build Interaction -----
@@ -157,7 +174,14 @@ const BLINK_HIGH_PHASE = 2;
     const current = grid[y][x];
     if (toolName === "erase") return current !== T.ENTRANCE && current !== T.EXIT;
     if (!(toolName in COSTS)) return false;
-    if (toolName === "room") return current !== T.ENTRANCE && current !== T.EXIT;
+    if (toolName === "room") {
+      if (current === T.ENTRANCE || current === T.EXIT) return false;
+      if (current === T.ROOM) return false; // no-op, don't allow spending on an existing room
+      // must be adjacent to an existing room
+      const adj = neighbors(x, y);
+      const hasAdjRoom = adj.some(([ax, ay]) => grid[ay][ax] === T.ROOM);
+      return hasAdjRoom;
+    }
     // other builds require an existing room and empty of other specials
     return current === T.ROOM;
   }
