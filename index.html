@@ -8,7 +8,7 @@
 </head>
 <body>
   <div id="app">
-    <aside class="panel">
+  <aside class="panel">
       <h1>Dungeon Core</h1>
       <div class="stats">
         <div><strong>Mana:</strong> <span id="mana">0</span></div>
@@ -27,13 +27,6 @@
         <button data-tool="erase">Erase</button>
       </div>
 
-      <h2>Sim</h2>
-      <div class="toolbar">
-        <button id="start">Start</button>
-        <button id="pause">Pause</button>
-        <button id="step">Step</button>
-        <button id="reset">Reset</button>
-      </div>
 
       <h2>Cult</h2>
       <div class="cult">
@@ -41,29 +34,7 @@
         <button id="cult-accept" disabled>Accept</button>
         <button id="cult-decline" disabled>Decline</button>
       </div>
-
-      <h2>Debug</h2>
-      <div class="debug">
-        <label><input type="checkbox" id="overlayToggle"> Show party map</label>
-        <div class="row">
-          <label for="partySelect">Party:</label>
-          <select id="partySelect"></select>
-        </div>
-        <div class="row">
-          <button id="cycleParty">Cycle</button>
-          <button id="clearMemory">Clear Memory</button>
-          <button id="forgetSelected">Forget Selected</button>
-        </div>
-      </div>
-
-      <h2>Party Inspector</h2>
-      <div class="debug">
-        <label><input type="checkbox" id="highlightToggle" checked> Highlight selected party</label>
-        <div id="partyInspector" class="log" style="max-height: 200px; overflow:auto;"></div>
-      </div>
-
-      <h2>Log</h2>
-      <div id="log" class="log"></div>
+  <!-- Debug and Logs moved to footer tabs -->
     </aside>
 
     <main>
@@ -78,8 +49,54 @@
         <span class="legend-item"><span class="legend-swatch exit"></span>Teleporter</span>
         <span class="legend-item"><span class="legend-swatch adventurer"></span>Adventurer</span>
       </div>
+
+      <div class="footer">
+        <div class="tabbar" role="tablist" aria-label="Footer Tabs">
+          <div class="tabbar-left">
+            <button class="tab active" role="tab" aria-selected="true" data-tab="logs" id="tab-logs">Logs</button>
+            <button class="tab" role="tab" aria-selected="false" data-tab="debug" id="tab-debug">Debug</button>
+          </div>
+          <div class="tabbar-right sim-controls" aria-label="Simulation Controls">
+            <button id="start" class="sim-btn btn-start" title="Start (▶)">▶</button>
+            <button id="pause" class="sim-btn btn-pause" title="Pause (⏸)">⏸</button>
+            <button id="step" class="sim-btn btn-step" title="Step (⏭)">⏭</button>
+            <button id="reset" class="sim-btn btn-reset" title="Reset (⟲)">⟲</button>
+          </div>
+        </div>
+        <div class="tabpanes">
+          <div class="tabpanel active" role="tabpanel" data-tab="logs" id="pane-logs">
+            <div id="log" class="log"></div>
+          </div>
+          <div class="tabpanel" role="tabpanel" data-tab="debug" id="pane-debug">
+            <div class="debug">
+              <label style="display:block; margin-bottom:6px;"><input type="checkbox" id="overlayToggle"> Show party map</label>
+              <div class="row" style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
+                <label for="partySelect">Party:</label>
+                <select id="partySelect"></select>
+                <button id="cycleParty">Cycle</button>
+                <button id="clearMemory">Clear Memory</button>
+                <button id="forgetSelected">Forget Selected</button>
+              </div>
+              <label style="display:block; margin-bottom:6px;"><input type="checkbox" id="highlightToggle" checked> Highlight selected party</label>
+              <div id="partyInspector" class="log" style="max-height: 220px; overflow:auto;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
     </main>
   </div>
+  <script>
+    // Simple tab switcher for footer
+    document.addEventListener('DOMContentLoaded', () => {
+      const tabs = Array.from(document.querySelectorAll('.tabbar .tab'));
+      const panes = Array.from(document.querySelectorAll('.tabpanel'));
+      tabs.forEach(tab => tab.addEventListener('click', () => {
+        const id = tab.dataset.tab;
+        tabs.forEach(t => t.classList.toggle('active', t === tab));
+        panes.forEach(p => p.classList.toggle('active', p.dataset.tab === id));
+      }));
+    });
+  </script>
   <script type="module" src="main.js"></script>
 </body>
 </html>

@@ -143,3 +143,109 @@ canvas {
 .legend-swatch.adventurer {
     background: #9ce2ff
 }
+
+/* Footer tabs */
+.footer {
+    width: 100%;
+    border: 1px solid #1f2630;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #0e1318;
+}
+
+.tabbar {
+    display: flex;
+    justify-content: space-between;
+    background: #0f151b;
+    border-bottom: 1px solid #1f2630;
+}
+
+.tabbar-left {
+    display: flex;
+    gap: 2px;
+}
+
+.tabbar-right {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 4px 8px;
+}
+
+.tabbar .tab {
+    padding: 8px 12px;
+    background: transparent;
+    border: none;
+    border-right: 1px solid #1f2630;
+    color: #9fb3c8;
+    font-size: 12px;
+}
+
+.tabbar .tab.active {
+    color: #e6e9ef;
+    background: #121920;
+}
+
+.tabpanes {
+    padding: 8px;
+}
+
+.tabpanel {
+    display: none;
+}
+
+.tabpanel.active {
+    display: block;
+}
+
+/* Sim buttons */
+.sim-controls .sim-btn {
+    min-width: 34px;
+    height: 28px;
+    border-radius: 6px;
+    border: 1px solid #273246;
+    background: #1c2530;
+    color: #e6e9ef;
+    font-size: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    padding: 0;
+}
+
+.sim-controls .btn-start {
+    background: #16331f;
+    border-color: #1e5a32;
+}
+
+.sim-controls .btn-start:hover {
+    background: #1a3e26;
+}
+
+.sim-controls .btn-pause {
+    background: #2a1a1a;
+    border-color: #5a2a2a;
+}
+
+.sim-controls .btn-pause:hover {
+    background: #351f1f;
+}
+
+.sim-controls .btn-step {
+    background: #1f2635;
+    border-color: #2a3e6a;
+}
+
+.sim-controls .btn-step:hover {
+    background: #23304a;
+}
+
+.sim-controls .btn-reset {
+    background: #26221f;
+    border-color: #6a4a2a;
+}
+
+.sim-controls .btn-reset:hover {
+    background: #2f281f;
+}
