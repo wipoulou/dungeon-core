@@ -57,6 +57,7 @@ import { makeMember } from "./src/classes.js";
     partySelect: document.getElementById("partySelect"),
     cycleParty: document.getElementById("cycleParty"),
     clearMemory: document.getElementById("clearMemory"),
+  forgetSelected: document.getElementById("forgetSelected"),
   highlightToggle: document.getElementById("highlightToggle"),
   partyInspector: document.getElementById("partyInspector"),
   };
@@ -72,6 +73,7 @@ import { makeMember } from "./src/classes.js";
   el.cultDecline.onclick = () => declineCult();
   el.cycleParty.onclick = () => cyclePartySelection();
   el.clearMemory.onclick = () => clearSavedMemory();
+  el.forgetSelected.onclick = () => forgetSelectedMemory();
   el.partySelect.onchange = () => updatePartyInspector();
   el.overlayToggle?.addEventListener("change", () => updatePartyInspector());
   el.highlightToggle?.addEventListener("change", () => {});
@@ -127,11 +129,11 @@ import { makeMember } from "./src/classes.js";
   // class/traits are now provided by registry in src/classes.js
 
   function blankKnowledge() {
-    return Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => ({ seen: false, type: -1, danger: 0 })));
+    return Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => ({ seen: false, type: -1, danger: 0, lastSeenTick: 0 })));
   }
   function copyKnowledge(k) {
     const src = Array.isArray(k) && k.length ? k : blankKnowledge();
-    return src.map(row => row.map(c => ({ seen: !!c.seen, type: (c.type ?? -1), danger: (c.danger ?? 0) })));
+    return src.map(row => row.map(c => ({ seen: !!c.seen, type: (c.type ?? -1), danger: (c.danger ?? 0), lastSeenTick: (c.lastSeenTick ?? 0) })));
   }
 
   function reveal(party) {
@@ -148,6 +150,7 @@ import { makeMember } from "./src/classes.js";
             cell.seen = true;
             cell.type = grid[y][x];
             cell.danger = (cell.type === T.TRAP ? 4 : 0) + (cell.type === T.MOB ? 2 : 0);
+            cell.lastSeenTick = tick;
             if (grid[y][x] === T.EXIT) {
               party.exitKnown = true;
               party.exitPos = { x, y };
@@ -201,6 +204,22 @@ import { makeMember } from "./src/classes.js";
     RegularRoster.splice(0, RegularRoster.length);
     updatePartySelect();
     log("Cleared saved memory.");
+  }
+
+  function forgetSelectedMemory() {
+    const id = el.partySelect.value;
+    if (!id) return;
+    if (RegularMemory.has(id)) {
+      RegularMemory.delete(id);
+      const idx = RegularRoster.indexOf(id);
+      if (idx >= 0) RegularRoster.splice(idx, 1);
+      saveMemory();
+      updatePartySelect();
+      updatePartyInspector();
+      log(`Forgot memory for ${id}.`);
+    } else {
+      log(`No saved memory for ${id}.`);
+    }
   }
 
   function makeParty() {
@@ -419,8 +438,8 @@ import { makeMember } from "./src/classes.js";
     for (const p of adventurers) {
       options.push({ id: p.id, label: `${p.kind} ${p.id} (active)` });
     }
-    // known regulars not currently active
-    for (const id of RegularRoster) {
+    // known regulars from saved memory not currently active
+    for (const id of RegularMemory.keys()) {
       if (!adventurers.some(p => p.id === id)) {
         options.push({ id, label: `Regulars ${id} (memory)` });
       }
@@ -474,7 +493,8 @@ import { makeMember } from "./src/classes.js";
       if (p.members.length === 0) p.alive = false;
     });
     adventurers.forEach(p => {
-      if (p.kind === PARTY_KIND.REGULAR && (p.returned || p.exitKnown)) {
+      if (p.kind === PARTY_KIND.REGULAR) {
+        // Continuously checkpoint regular knowledge in-session; persisted to storage on window tick
         RegularMemory.set(p.id, {
           knowledge: copyKnowledge(p.knowledge),
           exitKnown: !!p.exitKnown,
@@ -557,7 +577,15 @@ import { makeMember } from "./src/classes.js";
     const stats = document.createElement("div");
     const ticks = party ? party.ticks : "—";
     const exitKnown = party ? party.exitKnown : (mem?.exitKnown ? "yes" : "no");
-    stats.textContent = `ticks: ${ticks} | exitKnown: ${exitKnown}`;
+    const knowledge = party ? party.knowledge : mem?.knowledge;
+    let exploredPct = "—";
+    if (knowledge) {
+      let seen = 0, total = GRID_W * GRID_H;
+      for (let y = 0; y < GRID_H; y++) { for (let x = 0; x < GRID_W; x++) { if (knowledge[y][x]?.seen) seen++; } }
+      exploredPct = Math.round((seen / total) * 100) + "%";
+    }
+    const exitPosStr = (party?.exitPos || mem?.exitPos) ? `@(${(party?.exitPos || mem?.exitPos).x},${(party?.exitPos || mem?.exitPos).y})` : "";
+    stats.textContent = `ticks: ${ticks} | exitKnown: ${exitKnown} ${exitPosStr} | explored: ${exploredPct}`;
     container.appendChild(stats);
 
     const list = document.createElement("div");
@@ -703,6 +731,21 @@ import { makeMember } from "./src/classes.js";
             }
           }
         }
+        // age-based dimming for seen tiles (stale memory darker)
+        for (let y = 0; y < GRID_H; y++) {
+          for (let x = 0; x < GRID_W; x++) {
+            const c = knowledge[y][x];
+            if (!c.seen) continue;
+            const age = Math.max(0, tick - (c.lastSeenTick || 0));
+            if (age <= 0) continue;
+            const alpha = Math.min(0.35, age / 120); // older -> darker
+            if (alpha > 0.01) {
+              ctx.globalAlpha = alpha;
+              ctx.fillStyle = "#000000";
+              ctx.fillRect(x * TILE, y * TILE, TILE - 1, TILE - 1);
+            }
+          }
+        }
         ctx.globalAlpha = 1;
         // draw known hazards/points
         for (let y = 0; y < GRID_H; y++) {
@@ -750,4 +793,5 @@ import { makeMember } from "./src/classes.js";
   loop();
   render();
   log("v2.2: Overlay of a selected party's known map (toggle in Debug) + Regular memory persisted to localStorage.");
+  log("v2.3: Party Inspector + richer memory with staleness shading and per-party forget.");
 })();
