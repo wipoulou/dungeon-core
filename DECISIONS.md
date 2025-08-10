@@ -19,3 +19,10 @@ Next: add UI to choose mob type to place; expose hooks for class/trait abilities
 - When a Regular party re-enters later, they respawn with the same roster, fully healed (HP) and with fresh MP.
 - Memory format in localStorage now includes `members` array per party id. Backward compatible: absence of `members` falls back to random generation.
 - Party Inspector shows a "Saved roster" summary when viewing a memory-only party.
+
+## 2025-08-10: Build mode UX improvements
+
+- Build toolbar now keeps the selected tool visually highlighted. The default is "Room".
+- Hover preview: when moving the cursor over the grid, the current tool shows a transparent preview of the tile at the hovered position.
+- Placement validation: all non-room builds (mob, trap, loot) require an existing Room tile. Invalid targets render a red hover highlight and clicking does not spend mana or change the tile.
+- Mana is only deducted on successful placement; failed attempts no longer consume mana.

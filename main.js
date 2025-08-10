@@ -20,6 +20,8 @@ import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
   let cultOffer = null;
   let cultTimer = 0;
   let killBoostActive = 0;
+  // Hover state for build preview
+  let hoverX = -1, hoverY = -1;
 
   // Regular memory pool (they come back with learned maps)
   const REGULAR_POOL_SIZE = 3;
@@ -64,8 +66,13 @@ import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
     partyInspector: document.getElementById("partyInspector"),
   };
 
+  function updateToolSelection() {
+    document.querySelectorAll('.toolbar button[data-tool]').forEach(btn => {
+      btn.classList.toggle('selected', btn.dataset.tool === tool);
+    });
+  }
   document.querySelectorAll('.toolbar button[data-tool]').forEach(b => {
-    b.addEventListener('click', () => tool = b.dataset.tool);
+    b.addEventListener('click', () => { tool = b.dataset.tool; updateToolSelection(); });
   });
   el.start.onclick = () => running = true;
   el.pause.onclick = () => running = false;
@@ -81,6 +88,15 @@ import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
   el.highlightToggle?.addEventListener("change", () => { });
 
   const ctx = el.grid.getContext("2d");
+  // hover tracking for build preview
+  el.grid.addEventListener("mousemove", (e) => {
+    const rect = el.grid.getBoundingClientRect();
+    const x = Math.floor((e.clientX - rect.left) / TILE);
+    const y = Math.floor((e.clientY - rect.top) / TILE);
+    if (x >= 0 && y >= 0 && x < GRID_W && y < GRID_H) { hoverX = x; hoverY = y; }
+    else { hoverX = -1; hoverY = -1; }
+  });
+  el.grid.addEventListener("mouseleave", () => { hoverX = -1; hoverY = -1; });
 
   // ----- Utilities -----
   function log(msg) {
@@ -93,6 +109,15 @@ import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
   function rnd(a, b) { return Math.floor(Math.random() * (b - a + 1)) + a; }
 
   // ----- Build Interaction -----
+  function canPlace(toolName, x, y) {
+    const current = grid[y][x];
+    if (toolName === "erase") return current !== T.ENTRANCE && current !== T.EXIT;
+    if (!(toolName in COSTS)) return false;
+    if (toolName === "room") return current !== T.ENTRANCE && current !== T.EXIT;
+    // other builds require an existing room and empty of other specials
+    return current === T.ROOM;
+  }
+
   el.grid.addEventListener("click", (e) => {
     const rect = el.grid.getBoundingClientRect();
     const x = Math.floor((e.clientX - rect.left) / TILE);
@@ -106,11 +131,14 @@ import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
     if (tool in COSTS) {
       const cost = COSTS[tool];
       if (mana < cost) { log(`Not enough mana for ${tool} (${cost})`); return; }
-      if (current === T.ENTRANCE || current === T.EXIT) return;
-      if (tool === "room") { grid[y][x] = T.ROOM; }
+      let placed = false;
+      if (!canPlace(tool, x, y)) {
+        // invalid placement; do not spend mana
+        return;
+      }
+      if (tool === "room") { grid[y][x] = T.ROOM; placed = true; }
       else if (tool === "mob") {
         if (grid[y][x] === T.ROOM) {
-          // Pick random registered mob type
           const mobDefs = listMobs();
           const chosen = mobDefs[Math.floor(Math.random() * mobDefs.length)];
           if (chosen) {
@@ -118,13 +146,13 @@ import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
             mobType[y][x] = chosen.id;
             mobHp[y][x] = chosen.maxHp;
             mobRespawn[y][x] = 0;
+            placed = true;
           }
         }
       }
-      else if (tool === "trap") { if (grid[y][x] === T.ROOM) grid[y][x] = T.TRAP; }
-      else if (tool === "loot") { if (grid[y][x] === T.ROOM) grid[y][x] = T.LOOT; }
-      mana -= cost;
-      updateUI();
+      else if (tool === "trap") { if (grid[y][x] === T.ROOM) { grid[y][x] = T.TRAP; placed = true; } }
+      else if (tool === "loot") { if (grid[y][x] === T.ROOM) { grid[y][x] = T.LOOT; placed = true; } }
+      if (placed) { mana -= cost; updateUI(); }
     }
   });
 
@@ -860,6 +888,29 @@ import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
         if (t === T.EXIT) { drawDot(x, y, "#b084ff"); }
       }
     }
+
+    // build hover preview (drawn over tiles, under parties)
+    if (hoverX >= 0 && hoverY >= 0) {
+      const valid = canPlace(tool, hoverX, hoverY);
+      let color = "#ffffff";
+      if (tool === "room") color = "#1e293b";
+      else if (tool === "mob") color = "#102c20";
+      else if (tool === "trap") color = "#2a1616";
+      else if (tool === "loot") color = "#2a2410";
+      else if (tool === "erase") color = "#333"
+      if (!valid) color = "#6b2222";
+      ctx.save();
+      ctx.globalAlpha = 0.45;
+      ctx.fillStyle = color;
+      ctx.fillRect(hoverX * TILE, hoverY * TILE, TILE - 1, TILE - 1);
+      if (!valid) {
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = "#b33";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(hoverX * TILE + 1, hoverY * TILE + 1, TILE - 3, TILE - 3);
+      }
+      ctx.restore();
+    }
     // adventurers rendered as a single marker per party
     const selectedId = el.partySelect.value;
     const highlight = !!el.highlightToggle?.checked;
@@ -979,6 +1030,8 @@ import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
   loadMemory();
   updatePartySelect();
   updateUI();
+  // initialize selected build tool button UI
+  updateToolSelection();
   loop();
   render();
 })();
