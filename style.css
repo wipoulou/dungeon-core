@@ -1,24 +1,256 @@
-*{box-sizing:border-box}body{margin:0;background:#0c0f12;color:#e6e9ef;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif}
-#app{display:flex;min-height:100vh}
-.panel{width:320px;background:#12161b;border-right:1px solid #1f2630;padding:16px;display:flex;flex-direction:column;gap:12px}
-h1{margin:0 0 8px 0;font-size:20px}
-h2{margin:8px 0 4px 0;font-size:14px;color:#9fb3c8;text-transform:uppercase;letter-spacing:.08em}
-.stats>div{margin:4px 0}
-.toolbar{display:flex;flex-wrap:wrap;gap:8px}
-button{background:#1c2530;color:#e6e9ef;border:1px solid #273246;padding:8px 10px;border-radius:10px;cursor:pointer}
-button:hover{background:#223044}
-button:disabled{opacity:.5;cursor:not-allowed}
-.log{background:#0e1318;border:1px solid #1f2630;border-radius:8px;padding:8px;height:200px;overflow:auto;font-family:ui-monospace,Consolas,monospace;font-size:12px}
-main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px}
-canvas{background:#0a0e12;border:1px solid #1f2630;border-radius:10px;image-rendering:pixelated}
-.legend{display:flex;gap:16px;flex-wrap:wrap}
-.legend-item{display:flex;align-items:center;gap:6px}
-.legend-swatch{display:inline-block;width:16px;height:16px;border-radius:4px;border:1px solid #1f2630}
-.legend-swatch.room{background:#1e293b}
-.legend-swatch.wall{background:#090c10}
-.legend-swatch.mob{background:#47ff88}
-.legend-swatch.trap{background:#ff5a47}
-.legend-swatch.loot{background:#ffd447}
-.legend-swatch.entrance{background:#7cc1ff}
-.legend-swatch.exit{background:#b084ff}
-.legend-swatch.adventurer{background:#9ce2ff}
+* {
+    box-sizing: border-box
+}
+
+body {
+    margin: 0;
+    background: #0c0f12;
+    color: #e6e9ef;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Arial, sans-serif
+}
+
+#app {
+    display: flex;
+    min-height: 100vh
+}
+
+.panel {
+    width: 320px;
+    background: #12161b;
+    border-right: 1px solid #1f2630;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px
+}
+
+h1 {
+    margin: 0 0 8px 0;
+    font-size: 20px
+}
+
+h2 {
+    margin: 8px 0 4px 0;
+    font-size: 14px;
+    color: #9fb3c8;
+    text-transform: uppercase;
+    letter-spacing: .08em
+}
+
+.stats>div {
+    margin: 4px 0
+}
+
+.toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px
+}
+
+button {
+    background: #1c2530;
+    color: #e6e9ef;
+    border: 1px solid #273246;
+    padding: 8px 10px;
+    border-radius: 10px;
+    cursor: pointer
+}
+
+button:hover {
+    background: #223044
+}
+
+.toolbar button.selected {
+    outline: 2px solid #3a86ff;
+    background: #1c2a3c;
+}
+
+button:disabled {
+    opacity: .5;
+    cursor: not-allowed
+}
+
+.log {
+    background: #0e1318;
+    border: 1px solid #1f2630;
+    border-radius: 8px;
+    padding: 8px;
+    height: 200px;
+    overflow: auto;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 12px
+}
+
+main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 16px
+}
+
+canvas {
+    background: #0a0e12;
+    border: 1px solid #1f2630;
+    border-radius: 10px;
+    image-rendering: pixelated
+}
+
+.legend {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px
+}
+
+.legend-swatch {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1px solid #1f2630
+}
+
+.legend-swatch.room {
+    background: #1e293b
+}
+
+.legend-swatch.wall {
+    background: #090c10
+}
+
+.legend-swatch.mob {
+    background: #47ff88
+}
+
+.legend-swatch.trap {
+    background: #ff5a47
+}
+
+.legend-swatch.loot {
+    background: #ffd447
+}
+
+.legend-swatch.entrance {
+    background: #7cc1ff
+}
+
+.legend-swatch.exit {
+    background: #b084ff
+}
+
+.legend-swatch.adventurer {
+    background: #9ce2ff
+}
+
+/* Footer tabs */
+.footer {
+    width: 100%;
+    border: 1px solid #1f2630;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #0e1318;
+}
+
+.tabbar {
+    display: flex;
+    justify-content: space-between;
+    background: #0f151b;
+    border-bottom: 1px solid #1f2630;
+}
+
+.tabbar-left {
+    display: flex;
+    gap: 2px;
+}
+
+.tabbar-right {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 4px 8px;
+}
+
+.tabbar .tab {
+    padding: 8px 12px;
+    background: transparent;
+    border: none;
+    border-right: 1px solid #1f2630;
+    color: #9fb3c8;
+    font-size: 12px;
+}
+
+.tabbar .tab.active {
+    color: #e6e9ef;
+    background: #121920;
+}
+
+.tabpanes {
+    padding: 8px;
+}
+
+.tabpanel {
+    display: none;
+}
+
+.tabpanel.active {
+    display: block;
+}
+
+/* Sim buttons */
+.sim-controls .sim-btn {
+    min-width: 34px;
+    height: 28px;
+    border-radius: 6px;
+    border: 1px solid #273246;
+    background: #1c2530;
+    color: #e6e9ef;
+    font-size: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    padding: 0;
+}
+
+.sim-controls .btn-start {
+    background: #16331f;
+    border-color: #1e5a32;
+}
+
+.sim-controls .btn-start:hover {
+    background: #1a3e26;
+}
+
+.sim-controls .btn-pause {
+    background: #2a1a1a;
+    border-color: #5a2a2a;
+}
+
+.sim-controls .btn-pause:hover {
+    background: #351f1f;
+}
+
+.sim-controls .btn-step {
+    background: #1f2635;
+    border-color: #2a3e6a;
+}
+
+.sim-controls .btn-step:hover {
+    background: #23304a;
+}
+
+.sim-controls .btn-reset {
+    background: #26221f;
+    border-color: #6a4a2a;
+}
+
+.sim-controls .btn-reset:hover {
+    background: #2f281f;
+}
