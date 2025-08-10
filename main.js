@@ -124,6 +124,7 @@ import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
       else if (tool === "trap") { if (grid[y][x] === T.ROOM) grid[y][x] = T.TRAP; }
       else if (tool === "loot") { if (grid[y][x] === T.ROOM) grid[y][x] = T.LOOT; }
       mana -= cost;
+      updateUI();
     }
   });
 
@@ -755,9 +756,16 @@ import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
     const knowledge = party ? party.knowledge : mem?.knowledge;
     let exploredPct = "—";
     if (knowledge) {
-      let seen = 0, total = GRID_W * GRID_H;
-      for (let y = 0; y < GRID_H; y++) { for (let x = 0; x < GRID_W; x++) { if (knowledge[y][x]?.seen) seen++; } }
-      exploredPct = Math.round((seen / total) * 100) + "%";
+      let seen = 0, total = 0;
+      for (let y = 0; y < GRID_H; y++) {
+        for (let x = 0; x < GRID_W; x++) {
+          if (grid[y][x] === T.ROOM) {
+            total++;
+            if (knowledge[y][x]?.seen) seen++;
+          }
+        }
+      }
+      exploredPct = total > 0 ? Math.round((seen / total) * 100) + "%" : "0%";
     }
     const exitPosStr = (party?.exitPos || mem?.exitPos) ? `@(${(party?.exitPos || mem?.exitPos).x},${(party?.exitPos || mem?.exitPos).y})` : "";
     stats.textContent = `ticks: ${ticks} | exitKnown: ${exitKnown} ${exitPosStr} | explored: ${exploredPct}`;
@@ -814,7 +822,7 @@ import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
       };
     }
   }
-  function acceptCult() { if (!cultOffer) return; cultOffer.onAccept(); el.cultOffer.textContent = "Offer active."; el.cultAccept.disabled = true; el.cultDecline.disabled = true; cultTimer = rnd(80, 140); }
+  function acceptCult() { if (!cultOffer) return; cultOffer.onAccept(); el.cultOffer.textContent = "Offer active."; el.cultAccept.disabled = true; el.cultDecline.disabled = true; cultTimer = rnd(80, 140); updateUI(); }
   function declineCult() { cultOffer = null; el.cultOffer.textContent = "No offer."; el.cultAccept.disabled = true; el.cultDecline.disabled = true; cultTimer = rnd(80, 140); }
 
   function updateUI() {
