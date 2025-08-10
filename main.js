@@ -2,6 +2,12 @@ import { GRID_W, GRID_H, TILE, STARTING_MANA, COSTS, SPAWN_RATE, MAX_ADVENTURERS
 import { MobRegistry, getMob, listMobs } from "./src/mobs.js";
 import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
 
+// Blink overlay constants for invalid actions
+const BLINK_CYCLE_FRAMES = 4;
+const BLINK_HIGH_ALPHA = 0.45;
+const BLINK_LOW_ALPHA = 0.2;
+const BLINK_HIGH_PHASE = 2;
+
 (() => {
   // ----- Config (migrated to modules) -----
 
@@ -22,6 +28,8 @@ import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
   let killBoostActive = 0;
   // Hover state for build preview
   let hoverX = -1, hoverY = -1;
+  // Blink overlays for invalid actions
+  let blinks = [];
 
   // Regular memory pool (they come back with learned maps)
   const REGULAR_POOL_SIZE = 3;
@@ -107,6 +115,42 @@ import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
   }
   function neighbors(x, y) { return [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]].filter(([a, b]) => a >= 0 && a < GRID_W && b >= 0 && b < GRID_H); }
   function rnd(a, b) { return Math.floor(Math.random() * (b - a + 1)) + a; }
+  function getTileAt(x, y) {
+    if (x < 0 || y < 0 || x >= GRID_W || y >= GRID_H) return T.WALL;
+    return grid[y][x];
+  }
+
+  function findEntranceExit() {
+    let ent = null, ext = null;
+    for (let y = 0; y < GRID_H; y++) {
+      for (let x = 0; x < GRID_W; x++) {
+        const t = grid[y][x];
+        if (t === T.ENTRANCE) ent = { x, y };
+        if (t === T.EXIT) ext = { x, y };
+      }
+    }
+    return { ent, ext };
+  }
+
+  function hasPathIfRemoved(rx, ry) {
+    const { ent, ext } = findEntranceExit();
+    if (!ent || !ext) return false; // fail-closed: missing entrance/exit is invalid
+    // BFS from entrance to exit treating (rx,ry) as wall
+    const q = [ent];
+    const seen = new Set([`${ent.x},${ent.y}`]);
+    while (q.length) {
+      const cur = q.shift();
+      if (cur.x === ext.x && cur.y === ext.y) return true;
+      for (const [nx, ny] of neighbors(cur.x, cur.y)) {
+        if (nx === rx && ny === ry) continue; // pretend removed -> wall
+        const t = grid[ny][nx];
+        if (!isWalkableType(t)) continue;
+        const k = `${nx},${ny}`;
+        if (!seen.has(k)) { seen.add(k); q.push({ x: nx, y: ny }); }
+      }
+    }
+    return false;
+  }
 
   // ----- Build Interaction -----
   function canPlace(toolName, x, y) {
@@ -125,7 +169,31 @@ import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
     if (x < 0 || y < 0 || x >= GRID_W || y >= GRID_H) return;
     const current = grid[y][x];
     if (tool === "erase") {
-      if (current !== T.ENTRANCE && current !== T.EXIT) { grid[y][x] = T.WALL; }
+      if (current === T.ENTRANCE || current === T.EXIT) {
+        if (current === T.ENTRANCE) {
+          log("Cannot erase entrance tile.");
+        }
+        blinks.push({ x, y, life: 10 });
+        return;
+      }
+      if (current === T.MOB) {
+        grid[y][x] = T.ROOM;
+        mobType[y][x] = null;
+        mobHp[y][x] = 0;
+        mobRespawn[y][x] = 0;
+        return;
+      }
+      if (current === T.TRAP || current === T.LOOT) { grid[y][x] = T.ROOM; return; }
+      if (current === T.ROOM) {
+        // only allow if path still exists after removal
+        if (hasPathIfRemoved(x, y)) { grid[y][x] = T.WALL; return; }
+        else {
+          log("Cannot erase this room: it would block the path between entrance and exit.");
+        }
+        // invalid: blink red overlay
+        blinks.push({ x, y, life: 10 });
+        return;
+      }
       return;
     }
     if (tool in COSTS) {
@@ -134,6 +202,7 @@ import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
       let placed = false;
       if (!canPlace(tool, x, y)) {
         // invalid placement; do not spend mana
+        blinks.push({ x, y, life: 10 });
         return;
       }
       if (tool === "room") { grid[y][x] = T.ROOM; placed = true; }
@@ -891,7 +960,14 @@ import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
 
     // build hover preview (drawn over tiles, under parties)
     if (hoverX >= 0 && hoverY >= 0) {
-      const valid = canPlace(tool, hoverX, hoverY);
+      let valid = canPlace(tool, hoverX, hoverY);
+      // refine validity for erase on rooms: must preserve entrance-exit path
+      if (tool === "erase") {
+        const t = getTileAt(hoverX, hoverY);
+        if (t === T.ROOM) {
+          valid = valid && hasPathIfRemoved(hoverX, hoverY);
+        }
+      }
       let color = "#ffffff";
       if (tool === "room") color = "#1e293b";
       else if (tool === "mob") color = "#102c20";
@@ -1010,6 +1086,17 @@ import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
       ctx.globalAlpha = pt.life / 14;
       ctx.fillStyle = pt.color;
       ctx.fillRect(pt.x * TILE + 12, pt.y * TILE + 12, TILE - 24, TILE - 24);
+      ctx.globalAlpha = 1;
+      return true;
+    });
+    // blinks for invalid actions
+    blinks = blinks.filter(b => {
+      b.life--;
+      if (b.life <= 0) return false;
+      const alpha = (b.life % BLINK_CYCLE_FRAMES) < BLINK_HIGH_PHASE ? BLINK_HIGH_ALPHA : BLINK_LOW_ALPHA;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = "#b33";
+      ctx.fillRect(b.x * TILE, b.y * TILE, TILE - 1, TILE - 1);
       ctx.globalAlpha = 1;
       return true;
     });
