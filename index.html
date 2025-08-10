@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dungeon Core — Playable Prototype</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <aside class="panel">
+      <h1>Dungeon Core</h1>
+      <div class="stats">
+        <div><strong>Mana:</strong> <span id="mana">0</span></div>
+        <div><strong>Tick:</strong> <span id="tick">0</span></div>
+        <div><strong>Political Risk:</strong> <span id="political">0</span></div>
+        <div><strong>Economic Pressure:</strong> <span id="economic">0</span></div>
+        <div><strong>Guard Tension:</strong> <span id="tension">Calm</span></div>
+      </div>
+
+      <h2>Build</h2>
+      <div class="toolbar">
+        <button data-tool="room">Room (5)</button>
+        <button data-tool="mob">Mob (15)</button>
+        <button data-tool="trap">Trap (20)</button>
+        <button data-tool="loot">Loot Node (10)</button>
+        <button data-tool="erase">Erase</button>
+      </div>
+
+      <h2>Sim</h2>
+      <div class="toolbar">
+        <button id="start">Start</button>
+        <button id="pause">Pause</button>
+        <button id="step">Step</button>
+        <button id="reset">Reset</button>
+      </div>
+
+      <h2>Cult</h2>
+      <div class="cult">
+        <div id="cult-offer">No offer.</div>
+        <button id="cult-accept" disabled>Accept</button>
+        <button id="cult-decline" disabled>Decline</button>
+      </div>
+
+      <h2>Debug</h2>
+      <div class="debug">
+        <label><input type="checkbox" id="overlayToggle"> Show party map</label>
+        <div class="row">
+          <label for="partySelect">Party:</label>
+          <select id="partySelect"></select>
+        </div>
+        <div class="row">
+          <button id="cycleParty">Cycle</button>
+          <button id="clearMemory">Clear Memory</button>
+        </div>
+      </div>
+
+      <h2>Log</h2>
+      <div id="log" class="log"></div>
+    </aside>
+
+    <main>
+      <canvas id="grid" width="768" height="512"></canvas>
+      <div class="legend">
+        <span class="legend-item"><span class="legend-swatch room"></span>Room</span>
+        <span class="legend-item"><span class="legend-swatch wall"></span>Wall</span>
+        <span class="legend-item"><span class="legend-swatch mob"></span>Mob</span>
+        <span class="legend-item"><span class="legend-swatch trap"></span>Trap</span>
+        <span class="legend-item"><span class="legend-swatch loot"></span>Loot</span>
+        <span class="legend-item"><span class="legend-swatch entrance"></span>Entrance</span>
+        <span class="legend-item"><span class="legend-swatch exit"></span>Teleporter</span>
+        <span class="legend-item"><span class="legend-swatch adventurer"></span>Adventurer</span>
+      </div>
+    </main>
+  </div>
+  <script src="main.js"></script>
+</body>
+</html>
