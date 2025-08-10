@@ -13,16 +13,16 @@ export const MobRegistry = new Map();
 // }
 
 export function defineMob(def) {
-  if (!def?.id) throw new Error("Mob def requires id");
-  MobRegistry.set(def.id, def);
+    if (!def?.id) throw new Error("Mob def requires id");
+    MobRegistry.set(def.id, def);
 }
 
 export function getMob(id) {
-  return MobRegistry.get(id);
+    return MobRegistry.get(id);
 }
 
 export function listMobs() {
-  return [...MobRegistry.values()];
+    return [...MobRegistry.values()];
 }
 
 // Default/base mobs

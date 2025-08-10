@@ -14,26 +14,26 @@ export const ECON_RAID_THRESHOLD = 100;
 export const STORAGE_KEY = "dc_regular_memory_v1";
 
 export const T = {
-  WALL: 0,
-  ROOM: 1,
-  MOB: 2,
-  TRAP: 3,
-  LOOT: 4,
-  ENTRANCE: 5,
-  EXIT: 6,
+    WALL: 0,
+    ROOM: 1,
+    MOB: 2,
+    TRAP: 3,
+    LOOT: 4,
+    ENTRANCE: 5,
+    EXIT: 6,
 };
 
 export function inBounds(x, y) {
-  return x >= 0 && y >= 0 && x < GRID_W && y < GRID_H;
+    return x >= 0 && y >= 0 && x < GRID_W && y < GRID_H;
 }
 
 export function isWalkableType(t) {
-  return (
-    t === T.ROOM ||
-    t === T.MOB ||
-    t === T.TRAP ||
-    t === T.LOOT ||
-    t === T.ENTRANCE ||
-    t === T.EXIT
-  );
+    return (
+        t === T.ROOM ||
+        t === T.MOB ||
+        t === T.TRAP ||
+        t === T.LOOT ||
+        t === T.ENTRANCE ||
+        t === T.EXIT
+    );
 }

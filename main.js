@@ -57,6 +57,8 @@ import { makeMember } from "./src/classes.js";
     partySelect: document.getElementById("partySelect"),
     cycleParty: document.getElementById("cycleParty"),
     clearMemory: document.getElementById("clearMemory"),
+  highlightToggle: document.getElementById("highlightToggle"),
+  partyInspector: document.getElementById("partyInspector"),
   };
 
   document.querySelectorAll('.toolbar button[data-tool]').forEach(b => {
@@ -70,6 +72,9 @@ import { makeMember } from "./src/classes.js";
   el.cultDecline.onclick = () => declineCult();
   el.cycleParty.onclick = () => cyclePartySelection();
   el.clearMemory.onclick = () => clearSavedMemory();
+  el.partySelect.onchange = () => updatePartyInspector();
+  el.overlayToggle?.addEventListener("change", () => updatePartyInspector());
+  el.highlightToggle?.addEventListener("change", () => {});
 
   const ctx = el.grid.getContext("2d");
 
@@ -384,12 +389,6 @@ import { makeMember } from "./src/classes.js";
       particles.push({ x: m.x, y: m.y, life: 10, color: "#ff5a47" });
       if (Math.random() < 0.1) grid[m.y][m.x] = T.ROOM;
     }
-    if (m.mp > 0 && Math.random() < 0.25) {
-      const spend = rnd(1, 3);
-      m.mp -= spend;
-      mana += spend;
-      particles.push({ x: m.x, y: m.y, life: 8, color: "#9ce2ff" });
-    }
     if (m.bleeding > 0) { m.bleeding--; m.hp -= 1; mana += 1; }
   }
 
@@ -438,6 +437,7 @@ import { makeMember } from "./src/classes.js";
     } else if (options.length) {
       el.partySelect.value = options[0].id;
     }
+  updatePartyInspector();
   }
   function cyclePartySelection() {
     const opts = el.partySelect.options;
@@ -529,6 +529,52 @@ import { makeMember } from "./src/classes.js";
 
     updateUI();
     updatePartySelect();
+    updatePartyInspector();
+  }
+
+  function selectedPartyOrMemory() {
+    const id = el.partySelect.value;
+    const party = adventurers.find(p => p.id === id) || null;
+    const mem = party ? null : RegularMemory.get(id) || null;
+    return { party, mem };
+  }
+
+  function updatePartyInspector() {
+    if (!el.partyInspector) return;
+    const { party, mem } = selectedPartyOrMemory();
+    const container = el.partyInspector;
+    container.innerHTML = "";
+    if (!party && !mem) {
+      container.textContent = "No party selected.";
+      return;
+    }
+    const title = document.createElement("div");
+    const id = el.partySelect.value;
+    const kind = party ? party.kind : "Regulars";
+    title.innerHTML = `<strong>${kind} ${id}</strong>`;
+    container.appendChild(title);
+
+    const stats = document.createElement("div");
+    const ticks = party ? party.ticks : "—";
+    const exitKnown = party ? party.exitKnown : (mem?.exitKnown ? "yes" : "no");
+    stats.textContent = `ticks: ${ticks} | exitKnown: ${exitKnown}`;
+    container.appendChild(stats);
+
+    const list = document.createElement("div");
+    list.style.marginTop = "6px";
+    const members = party ? party.members : [];
+    if (members.length === 0 && party) {
+      const dead = document.createElement("div");
+      dead.textContent = "No surviving members.";
+      list.appendChild(dead);
+    }
+    members.forEach((m, i) => {
+      const row = document.createElement("div");
+      const hpPct = Math.max(0, Math.round((m.hp / m.maxhp) * 100));
+      row.textContent = `#${i + 1} L${m.level} ${m.cls} [HP ${m.hp}/${m.maxhp} ${hpPct}% | MP ${m.mp}] trait: ${m.trait} @(${m.x},${m.y}) loot:${m.loot}`;
+      list.appendChild(row);
+    });
+    container.appendChild(list);
   }
 
   function generateCultOffer() {
@@ -596,10 +642,19 @@ import { makeMember } from "./src/classes.js";
       }
     }
     // adventurers
+    const selectedId = el.partySelect.value;
+    const highlight = !!el.highlightToggle?.checked;
     adventurers.forEach(p => {
       p.members.forEach(m => {
-        ctx.fillStyle = "#9ce2ff";
+        const isSelected = highlight && p.id === selectedId;
+        ctx.fillStyle = isSelected ? "#ffffff" : "#9ce2ff";
         ctx.fillRect(m.x * TILE + 8, m.y * TILE + 8, TILE - 16, TILE - 16);
+        if (isSelected) {
+          // subtle outline
+          ctx.strokeStyle = "#ffd447";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(m.x * TILE + 7, m.y * TILE + 7, TILE - 14, TILE - 14);
+        }
       });
     });
     // draw names and health bars

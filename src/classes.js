@@ -4,35 +4,35 @@ export const ClassRegistry = new Map();
 export const TraitRegistry = new Map();
 
 export function defineClass(id, def) {
-  ClassRegistry.set(id, { id, ...def });
+    ClassRegistry.set(id, { id, ...def });
 }
 export function defineTrait(id, def) {
-  TraitRegistry.set(id, { id, ...def });
+    TraitRegistry.set(id, { id, ...def });
 }
 
 export function pickRandomFrom(arr) {
-  return arr[Math.floor(Math.random() * arr.length)];
+    return arr[Math.floor(Math.random() * arr.length)];
 }
 
 export function makeMember(level = 1) {
-  const cls = pickRandomFrom([...ClassRegistry.keys()]);
-  const trait = pickRandomFrom([...TraitRegistry.keys()]);
-  const base = ClassRegistry.get(cls);
-  const scale = 1 + (level - 1) * 0.25;
-  const maxhp = Math.round(base.baseHp * scale);
-  const mp = Math.round(base.baseMp * scale);
-  return {
-    hp: maxhp,
-    maxhp,
-    mp,
-    cls,
-    trait,
-    level,
-    x: 1,
-    y: 0, // caller should set y
-    loot: 0,
-    bleeding: 0,
-  };
+    const cls = pickRandomFrom([...ClassRegistry.keys()]);
+    const trait = pickRandomFrom([...TraitRegistry.keys()]);
+    const base = ClassRegistry.get(cls);
+    const scale = 1 + (level - 1) * 0.25;
+    const maxhp = Math.round(base.baseHp * scale);
+    const mp = Math.round(base.baseMp * scale);
+    return {
+        hp: maxhp,
+        maxhp,
+        mp,
+        cls,
+        trait,
+        level,
+        x: 1,
+        y: 0, // caller should set y
+        loot: 0,
+        bleeding: 0,
+    };
 }
 
 // Defaults
