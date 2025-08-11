@@ -265,6 +265,32 @@ const BLINK_HIGH_PHASE = 2;
     return grid[y][x];
   }
 
+  // Potion helpers
+  function makePotion() {
+    const r = Math.random();
+    if (r < 0.6) return { kind: "healing", tier: "Minor", heal: 12 };
+    if (r < 0.9) return { kind: "healing", tier: "Standard", heal: 20 };
+    return { kind: "healing", tier: "Greater", heal: 32 };
+  }
+  function maybeUsePotion(party, m) {
+    if (!m || m.hp <= 0 || !m.potion) return false;
+    // Use if at or below 50% HP
+    if ((m.hp / m.maxhp) <= 0.5) {
+      const p = m.potion;
+      const before = m.hp;
+      m.hp = Math.min(m.maxhp, m.hp + (p.heal || 12));
+      const healed = m.hp - before;
+      if (healed > 0) {
+        mana += Math.floor(healed / 2);
+        particles.push({ x: m.x, y: m.y, life: 10, color: "#8dd0ff" });
+        log(`[Potion] ${party.id} ${m.cls} drinks ${p.tier || "Potion"} (+${healed} HP).`);
+      }
+      m.potion = null;
+      return true;
+    }
+    return false;
+  }
+
   function findEntranceExit() {
     let ent = null, ext = null;
     for (let y = 0; y < GRID_H; y++) {
@@ -525,7 +551,8 @@ const BLINK_HIGH_PHASE = 2;
     const scale = 1 + (level - 1) * 0.25;
     const maxhp = Math.round(base.baseHp * scale);
     const mp = Math.round(base.baseMp * scale);
-    return { hp: maxhp, maxhp, mp, cls, trait, level, x: 1, y: spawnY, loot: 0, bleeding: 0 };
+    const invMax = 3 + Math.floor((level - 1) / 2) + (base.carryBonus || 0);
+    return { hp: maxhp, maxhp, mp, cls, trait, level, x: 1, y: spawnY, coins: 0, inv: 0, invMax, potion: null, loot: 0, bleeding: 0 };
   }
 
   // Reveal tiles around party members based on class bonuses (e.g., ranger)
@@ -782,8 +809,30 @@ const BLINK_HIGH_PHASE = 2;
   function interact(party, m) {
     const t = tileAt(m.x, m.y);
     if (t === T.LOOT && Math.random() < 0.35) {
-      m.loot += rnd(1, 3);
-      mana += 1;
+      // roll what the node provides: coins or item or potion
+      const roll = Math.random();
+      if (roll < 0.5) {
+        const coins = rnd(1, 5);
+        m.coins += coins; // unlimited stash
+        mana += Math.floor(coins / 2);
+        log(`[Loot] ${party.id} ${m.cls} finds ${coins} coins.`);
+      } else if (roll < 0.85) {
+        if (m.inv < m.invMax) {
+          m.inv += 1;
+          mana += 1;
+          log(`[Loot] ${party.id} ${m.cls} picks up an item (${m.inv}/${m.invMax}).`);
+        } else {
+          log(`[Loot] ${party.id} ${m.cls} cannot carry more items (${m.inv}/${m.invMax}).`);
+        }
+      } else {
+        if (!m.potion) {
+          m.potion = makePotion();
+          mana += 1;
+          log(`[Loot] ${party.id} ${m.cls} stores a ${m.potion.tier} Potion.`);
+        } else {
+          log(`[Loot] ${party.id} ${m.cls} leaves a potion (already holding one).`);
+        }
+      }
       lootLastWindow += 1;
       particles.push({ x: m.x, y: m.y, life: 12, color: "#ffd447" });
       if (Math.random() < 0.15) { grid[m.y][m.x] = T.ROOM; }
@@ -851,6 +900,8 @@ const BLINK_HIGH_PHASE = 2;
       // party turn
       for (const m of party.members) {
         if (m.hp <= 0) continue;
+        // try potion first if hurt
+        if (maybeUsePotion(party, m)) continue;
         const skill = pickSkill(m);
         if (skill.type === "heal") {
           if (m.mp >= skill.cost) {
@@ -922,12 +973,17 @@ const BLINK_HIGH_PHASE = 2;
     if (killBoostActive > 0) gain += 10;
     mana += gain;
     particles.push({ x: m.x, y: m.y, life: 14, color: "#ff8aa8" });
+    log(`[Death] ${party.id} ${m.cls} (L${m.level}) dies at (${m.x},${m.y}).`);
     return true;
   }
 
   function maybeExit(party, m) {
     if (tileAt(m.x, m.y) === T.EXIT) {
-      mana += Math.floor(m.loot / 2);
+      // Convert carried items to coins, then coins to mana trickle
+      const itemCoins = m.inv * 2; // each item converts to 2 coins on exit
+      const coins = m.coins + itemCoins;
+      mana += Math.floor(coins / 2) + Math.floor(m.loot / 2);
+      m.coins = 0; m.inv = 0; m.potion = null;
       party.returned = true;
       return true;
     }
@@ -936,8 +992,14 @@ const BLINK_HIGH_PHASE = 2;
   // Party-level exit: if leader reaches exit, cash out all loot and remove the party
   function maybePartyExit(party, leader) {
     if (tileAt(leader.x, leader.y) === T.EXIT) {
-      const totalLoot = party.members.reduce((s, mm) => s + (mm.loot || 0), 0);
-      mana += Math.floor(totalLoot / 2);
+      // Cash out all members: items -> coins, then coins+loot -> mana
+      let totalCoins = 0, totalLoot = 0;
+      party.members.forEach(mm => {
+        totalCoins += (mm.coins || 0) + (mm.inv || 0) * 2;
+        totalLoot += (mm.loot || 0);
+        mm.coins = 0; mm.inv = 0; mm.potion = null;
+      });
+      mana += Math.floor(totalCoins / 2) + Math.floor(totalLoot / 2);
       party.returned = true;
       party.alive = false;
       return true;
@@ -994,12 +1056,14 @@ const BLINK_HIGH_PHASE = 2;
       // Single step per party
       reveal(p);
       const step = nextStepForMember(p, leader);
-      if (step) {
+  if (step) {
         // remember last position for flee
         p.lastPos = { x: leader.x, y: leader.y };
         p.members.forEach(m => { if (m.hp > 0) { m.x = step.x; m.y = step.y; } });
       }
       reveal(p);
+  // Quick check to drink potions outside combat
+  p.members.forEach(m => { if (m.hp > 0) maybeUsePotion(p, m); });
       // One interaction per party at leader tile
       interact(p, leader);
       // Bleed ticks for other alive members
@@ -1159,7 +1223,8 @@ const BLINK_HIGH_PHASE = 2;
     members.forEach((m, i) => {
       const row = document.createElement("div");
       const hpPct = Math.max(0, Math.round((m.hp / m.maxhp) * 100));
-      row.textContent = `#${i + 1} L${m.level} ${m.cls} [HP ${m.hp}/${m.maxhp} ${hpPct}% | MP ${m.mp}] trait: ${m.trait} @(${m.x},${m.y}) loot:${m.loot}`;
+  const potStr = m.potion ? ` potion:${m.potion.tier}` : "";
+  row.textContent = `#${i + 1} L${m.level} ${m.cls} [HP ${m.hp}/${m.maxhp} ${hpPct}% | MP ${m.mp}] trait: ${m.trait} @(${m.x},${m.y}) loot:${m.loot} items:${m.inv}/${m.invMax} coins:${m.coins}${potStr}`;
       list.appendChild(row);
     });
     container.appendChild(list);
