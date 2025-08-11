@@ -26,3 +26,9 @@ Next: add UI to choose mob type to place; expose hooks for class/trait abilities
 - Hover preview: when moving the cursor over the grid, the current tool shows a transparent preview of the tile at the hovered position.
 - Placement validation: all non-room builds (mob, trap, loot) require an existing Room tile. Invalid targets render a red hover highlight and clicking does not spend mana or change the tile.
 - Mana is only deducted on successful placement; failed attempts no longer consume mana.
+
+## 2025-08-11: GitHub Pages deployment
+
+- Added GitHub Actions workflow `.github/workflows/pages.yml` to deploy the static site on pushes to `main`.
+- Added `.nojekyll` to bypass Jekyll processing so module imports work.
+- Updated `README.md` with the Pages URL and local run instructions.
