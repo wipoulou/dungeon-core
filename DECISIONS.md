@@ -32,3 +32,10 @@ Next: add UI to choose mob type to place; expose hooks for class/trait abilities
 - Added GitHub Actions workflow `.github/workflows/pages.yml` to deploy the static site on pushes to `main`.
 - Added `.nojekyll` to bypass Jekyll processing so module imports work.
 - Updated `README.md` with the Pages URL and local run instructions.
+
+## 2025-08-11: Build UX — drag-to-build Rooms
+
+- Added drag placement for the Room tool in `main.js`.
+- Holding the mouse button and dragging creates multiple rooms in a line while mana lasts.
+- Invalid placements are silently skipped during drag (no mana spent), consistent with click behavior.
+- Suppresses the trailing click after a drag so the last tile isn't double-placed or logged.
