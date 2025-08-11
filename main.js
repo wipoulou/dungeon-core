@@ -17,7 +17,7 @@ const BLINK_HIGH_PHASE = 2;
   let politicalRisk = 0;
   let economicPressure = 0;
   let running = false;
-  let tool = "room";
+  let tool = "inspect";
   let adventurers = [];
   let particles = [];
   let killsLastWindow = 0;
@@ -28,6 +28,8 @@ const BLINK_HIGH_PHASE = 2;
   let killBoostActive = 0;
   // Hover state for build preview
   let hoverX = -1, hoverY = -1;
+  // Selected tile for tile inspector
+  let selX = -1, selY = -1;
   // Drag-build state for room placement
   let isMouseDown = false;
   let lastPlacedX = -1, lastPlacedY = -1;
@@ -75,17 +77,97 @@ const BLINK_HIGH_PHASE = 2;
     clearMemory: document.getElementById("clearMemory"),
     forgetSelected: document.getElementById("forgetSelected"),
     highlightToggle: document.getElementById("highlightToggle"),
-    partyInspector: document.getElementById("partyInspector"),
+  partyInspector: document.getElementById("partyInspector"),
+  tileInspector: document.getElementById("tileInspector"),
+  paletteLabel: document.getElementById("paletteLabel"),
+  paletteInfo: document.getElementById("paletteInfo"),
+  paletteGrid: document.getElementById("paletteGrid"),
   };
 
+  // Highlight the active tool button in the toolbar
   function updateToolSelection() {
     document.querySelectorAll('.toolbar button[data-tool]').forEach(btn => {
       btn.classList.toggle('selected', btn.dataset.tool === tool);
     });
   }
+  // Palette state and swatch-grid rendering
+  const PALETTE_KIND = { NONE: "none", MOB: "mob", TRAP: "trap", LOOT: "loot" };
+  let paletteKind = PALETTE_KIND.NONE;
+  let selectedMobId = null;
+
+  function refreshPaletteForTool() {
+    if (!el.paletteGrid) return;
+    let options = [];
+    if (tool === "mob") {
+      paletteKind = PALETTE_KIND.MOB;
+      const mobs = listMobs();
+      options = mobs.map(m => ({ value: m.id, label: m.name, color: m.color }));
+      el.paletteLabel.textContent = "Mob:";
+    } else if (tool === "trap") {
+      paletteKind = PALETTE_KIND.TRAP;
+      options = [{ value: "basic", label: "Basic Trap", color: "#ff5a47" }];
+      el.paletteLabel.textContent = "Trap:";
+    } else if (tool === "loot") {
+      paletteKind = PALETTE_KIND.LOOT;
+      options = [{ value: "basic", label: "Loot Node", color: "#ffd447" }];
+      el.paletteLabel.textContent = "Loot:";
+    } else {
+      paletteKind = PALETTE_KIND.NONE;
+      options = [];
+      el.paletteLabel.textContent = "Pick:";
+    }
+    el.paletteGrid.innerHTML = "";
+    options.forEach((opt, i) => {
+      const sw = document.createElement("button");
+      sw.type = "button";
+      sw.className = "palette-swatch";
+      sw.style.background = opt.color || "#1f2630";
+      sw.title = opt.label;
+      sw.dataset.value = opt.value;
+    sw.addEventListener("click", () => {
+        el.paletteGrid.querySelectorAll('.palette-swatch').forEach(n => n.classList.remove('selected'));
+        sw.classList.add('selected');
+        if (paletteKind === PALETTE_KIND.MOB) {
+      selectedMobId = opt.value;
+      const mob = listMobs().find(m => m.id === selectedMobId);
+      const c = mob?.cost ?? COSTS.mob;
+      el.paletteInfo.textContent = `${opt.label} — ${c} mana`;
+      updateMobToolLabel(c);
+        } else {
+          el.paletteInfo.textContent = opt.label;
+        }
+      });
+      const isSelected = (paletteKind === PALETTE_KIND.MOB) ? (selectedMobId ? opt.value === selectedMobId : i === 0) : i === 0;
+      if (isSelected) {
+        sw.classList.add('selected');
+        if (paletteKind === PALETTE_KIND.MOB && !selectedMobId) selectedMobId = opt.value;
+        if (paletteKind === PALETTE_KIND.MOB) {
+          const mob = listMobs().find(m => m.id === selectedMobId);
+          const c = mob?.cost ?? COSTS.mob;
+          el.paletteInfo.textContent = `${opt.label} — ${c} mana`;
+          updateMobToolLabel(c);
+        } else {
+          el.paletteInfo.textContent = opt.label || "";
+        }
+      }
+      el.paletteGrid.appendChild(sw);
+    });
+    if (options.length === 0) {
+      el.paletteInfo.textContent = "";
+    }
+  }
+
+  function updateMobToolLabel(cost) {
+    const mobBtn = document.querySelector('.toolbar button[data-tool="mob"]');
+    if (mobBtn) mobBtn.textContent = `Mob (${cost})`;
+  }
+
+  // Toolbar tool selection
   document.querySelectorAll('.toolbar button[data-tool]').forEach(b => {
-    b.addEventListener('click', () => { tool = b.dataset.tool; updateToolSelection(); });
+    b.addEventListener('click', () => { tool = b.dataset.tool; updateToolSelection(); updateTileInspector(); refreshPaletteForTool(); });
   });
+
+  // Sim buttons and toggles
   el.start.onclick = () => running = true;
   el.pause.onclick = () => running = false;
   el.step.onclick = () => { running = false; advance(); render(); };
@@ -228,6 +310,11 @@ const BLINK_HIGH_PHASE = 2;
     const x = Math.floor((e.clientX - rect.left) / TILE);
     const y = Math.floor((e.clientY - rect.top) / TILE);
     if (x < 0 || y < 0 || x >= GRID_W || y >= GRID_H) return;
+    if (tool === "inspect") {
+      selX = x; selY = y;
+      updateTileInspector();
+      return;
+    }
     // Suppress the trailing click after a drag-based room placement
     if (tool === "room" && suppressNextClickForRoom) { suppressNextClickForRoom = false; return; }
     const current = grid[y][x];
@@ -260,7 +347,13 @@ const BLINK_HIGH_PHASE = 2;
       return;
     }
     if (tool in COSTS) {
-      const cost = COSTS[tool];
+      // dynamic cost: for mobs, if a specific mob is selected, use its cost
+      let cost = COSTS[tool];
+      if (tool === "mob") {
+        const mobDefs = listMobs();
+        const chosen = (selectedMobId && mobDefs.find(m => m.id === selectedMobId)) || mobDefs[0];
+        if (chosen?.cost != null) cost = chosen.cost;
+      }
       if (mana < cost) { log(`Not enough mana for ${tool} (${cost})`); return; }
       let placed = false;
       if (!canPlace(tool, x, y)) {
@@ -272,7 +365,7 @@ const BLINK_HIGH_PHASE = 2;
       else if (tool === "mob") {
         if (grid[y][x] === T.ROOM) {
           const mobDefs = listMobs();
-          const chosen = mobDefs[Math.floor(Math.random() * mobDefs.length)];
+          const chosen = (selectedMobId && mobDefs.find(m => m.id === selectedMobId)) || mobDefs[0];
           if (chosen) {
             grid[y][x] = T.MOB;
             mobType[y][x] = chosen.id;
@@ -287,6 +380,65 @@ const BLINK_HIGH_PHASE = 2;
       if (placed) { mana -= cost; updateUI(); }
     }
   });
+
+  function tileTypeName(t) {
+    return {
+      [T.WALL]: "Wall",
+      [T.ROOM]: "Room",
+      [T.MOB]: "Mob",
+      [T.TRAP]: "Trap",
+      [T.LOOT]: "Loot",
+      [T.ENTRANCE]: "Entrance",
+      [T.EXIT]: "Teleporter",
+    }[t] || "Unknown";
+  }
+
+  function updateTileInspector() {
+    const box = el.tileInspector;
+    if (!box) return;
+    box.innerHTML = "";
+    if (selX < 0 || selY < 0) {
+      box.textContent = "Click a tile with Inspect tool.";
+      return;
+    }
+    const t = getTileAt(selX, selY);
+    const head = document.createElement("div");
+    head.innerHTML = `<strong>Tile (${selX},${selY})</strong> — ${tileTypeName(t)}`;
+    box.appendChild(head);
+
+    if (t === T.MOB) {
+      const id = mobType[selY][selX];
+      const def = getMob(id);
+      const hp = mobHp[selY][selX];
+      const mobDiv = document.createElement("div");
+      mobDiv.textContent = def ? `Mob: ${def.name} [HP ${hp}/${def.maxHp}]` : `Mob: Unknown [HP ${hp}]`;
+      box.appendChild(mobDiv);
+    }
+    if (t === T.TRAP) {
+      const trapDiv = document.createElement("div");
+      trapDiv.textContent = "Trap: Basic trap";
+      box.appendChild(trapDiv);
+    }
+    if (t === T.LOOT) {
+      const lootDiv = document.createElement("div");
+      lootDiv.textContent = "Loot node";
+      box.appendChild(lootDiv);
+    }
+    const here = adventurers.filter(p => p.members.some(m => m.hp > 0 && m.x === selX && m.y === selY));
+    if (here.length) {
+      const pHead = document.createElement("div");
+      pHead.style.marginTop = "6px";
+      pHead.innerHTML = `<strong>Parties here:</strong>`;
+      box.appendChild(pHead);
+      here.forEach(p => {
+        const totalHp = p.members.reduce((s, m) => s + Math.max(0, m.hp), 0);
+        const totalMax = p.members.reduce((s, m) => s + m.maxhp, 0);
+        const row = document.createElement("div");
+        row.textContent = `${p.kind} ${p.id} [HP ${totalHp}/${totalMax}] members:${p.members.length}`;
+        box.appendChild(row);
+      });
+    }
+  }
 
   // ----- Adventurers -----
   const PARTY_KIND = { REGULAR: "Regulars", TRAVELER: "Traveler" };
@@ -990,6 +1142,65 @@ const BLINK_HIGH_PHASE = 2;
     el.economic.textContent = economicPressure;
   }
 
+  function tileTypeName(t) {
+    return {
+      [T.WALL]: "Wall",
+      [T.ROOM]: "Room",
+      [T.MOB]: "Mob",
+      [T.TRAP]: "Trap",
+      [T.LOOT]: "Loot",
+      [T.ENTRANCE]: "Entrance",
+      [T.EXIT]: "Teleporter",
+    }[t] || "Unknown";
+  }
+
+  function updateTileInspector() {
+    const box = el.tileInspector;
+    if (!box) return;
+    box.innerHTML = "";
+    if (selX < 0 || selY < 0) {
+      box.textContent = "Click a tile with Inspect tool.";
+      return;
+    }
+    const t = getTileAt(selX, selY);
+    const head = document.createElement("div");
+    head.innerHTML = `<strong>Tile (${selX},${selY})</strong> — ${tileTypeName(t)}`;
+    box.appendChild(head);
+
+    if (t === T.MOB) {
+      const id = mobType[selY][selX];
+      const def = getMob(id);
+      const hp = mobHp[selY][selX];
+      const mobDiv = document.createElement("div");
+      mobDiv.textContent = def ? `Mob: ${def.name} [HP ${hp}/${def.maxHp}]` : `Mob: Unknown [HP ${hp}]`;
+      box.appendChild(mobDiv);
+    }
+    if (t === T.TRAP) {
+      const trapDiv = document.createElement("div");
+      trapDiv.textContent = "Trap: Basic trap";
+      box.appendChild(trapDiv);
+    }
+    if (t === T.LOOT) {
+      const lootDiv = document.createElement("div");
+      lootDiv.textContent = "Loot node";
+      box.appendChild(lootDiv);
+    }
+    const here = adventurers.filter(p => p.members.some(m => m.hp > 0 && m.x === selX && m.y === selY));
+    if (here.length) {
+      const pHead = document.createElement("div");
+      pHead.style.marginTop = "6px";
+      pHead.innerHTML = `<strong>Parties here:</strong>`;
+      box.appendChild(pHead);
+      here.forEach(p => {
+        const totalHp = p.members.reduce((s, m) => s + Math.max(0, m.hp), 0);
+        const totalMax = p.members.reduce((s, m) => s + m.maxhp, 0);
+        const row = document.createElement("div");
+        row.textContent = `${p.kind} ${p.id} [HP ${totalHp}/${totalMax}] members:${p.members.length}`;
+        box.appendChild(row);
+      });
+    }
+  }
+
   // ----- Rendering -----
   function render() {
     const ctx = el.grid.getContext("2d");
@@ -1021,7 +1232,7 @@ const BLINK_HIGH_PHASE = 2;
 
     // build hover preview (drawn over tiles, under parties)
     if (hoverX >= 0 && hoverY >= 0) {
-      let valid = canPlace(tool, hoverX, hoverY);
+      let valid = (tool === "inspect") ? true : canPlace(tool, hoverX, hoverY);
       // refine validity for erase on rooms: must preserve entrance-exit path
       if (tool === "erase") {
         const t = getTileAt(hoverX, hoverY);
@@ -1034,10 +1245,11 @@ const BLINK_HIGH_PHASE = 2;
       else if (tool === "mob") color = "#102c20";
       else if (tool === "trap") color = "#2a1616";
       else if (tool === "loot") color = "#2a2410";
-      else if (tool === "erase") color = "#333"
+  else if (tool === "erase") color = "#333";
+  else if (tool === "inspect") color = "#364152";
       if (!valid) color = "#6b2222";
       ctx.save();
-      ctx.globalAlpha = 0.45;
+  ctx.globalAlpha = tool === "inspect" ? 0.25 : 0.45;
       ctx.fillStyle = color;
       ctx.fillRect(hoverX * TILE, hoverY * TILE, TILE - 1, TILE - 1);
       if (!valid) {
@@ -1046,6 +1258,14 @@ const BLINK_HIGH_PHASE = 2;
         ctx.lineWidth = 2;
         ctx.strokeRect(hoverX * TILE + 1, hoverY * TILE + 1, TILE - 3, TILE - 3);
       }
+      ctx.restore();
+    }
+    // selection highlight for inspector
+    if (selX >= 0 && selY >= 0) {
+      ctx.save();
+      ctx.strokeStyle = "#3a86ff";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(selX * TILE + 1, selY * TILE + 1, TILE - 3, TILE - 3);
       ctx.restore();
     }
     // adventurers rendered as a single marker per party
@@ -1180,6 +1400,17 @@ const BLINK_HIGH_PHASE = 2;
   updateUI();
   // initialize selected build tool button UI
   updateToolSelection();
+  refreshPaletteForTool();
+  // If starting on Inspect, precompute mob label with default
+  if (selectedMobId) {
+    const mob = listMobs().find(m => m.id === selectedMobId);
+    const c = mob?.cost ?? COSTS.mob;
+    updateMobToolLabel(c);
+  } else {
+    const first = listMobs()[0];
+    if (first) updateMobToolLabel(first.cost ?? COSTS.mob);
+  }
   loop();
   render();
+  updateTileInspector();
 })();
