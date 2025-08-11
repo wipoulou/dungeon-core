@@ -1,5 +1,6 @@
 import { GRID_W, GRID_H, TILE, STARTING_MANA, COSTS, SPAWN_RATE, MAX_ADVENTURERS, POLITICAL_RAID_THRESHOLD, ECON_RAID_THRESHOLD, STORAGE_KEY, T, isWalkableType } from "./src/constants.js";
 import { MobRegistry, getMob, listMobs } from "./src/mobs.js";
+import { listTraps, getTrap } from "./src/traps.js";
 import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
 
 // Blink overlay constants for invalid actions
@@ -49,6 +50,9 @@ const BLINK_HIGH_PHASE = 2;
   const mobType = Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => null)); // string mob id
   // mob respawn timers (ticks until respawn), 0 when not pending
   const mobRespawn = Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => 0));
+  // typed trap support: store trap id and rearm timers
+  const trapType = Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => null));
+  const trapRearm = Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => 0));
 
   // Pre-place entrance + exit
   grid[Math.floor(GRID_H / 2)][1] = T.ENTRANCE;
@@ -94,6 +98,7 @@ const BLINK_HIGH_PHASE = 2;
   const PALETTE_KIND = { NONE: "none", MOB: "mob", TRAP: "trap", LOOT: "loot" };
   let paletteKind = PALETTE_KIND.NONE;
   let selectedMobId = null;
+  let selectedTrapId = null;
 
   function refreshPaletteForTool() {
     if (!el.paletteGrid) return;
@@ -105,7 +110,8 @@ const BLINK_HIGH_PHASE = 2;
       el.paletteLabel.textContent = "Mob:";
     } else if (tool === "trap") {
       paletteKind = PALETTE_KIND.TRAP;
-      options = [{ value: "basic", label: "Basic Trap", color: "#ff5a47" }];
+      const traps = listTraps();
+      options = traps.map(t => ({ value: t.id, label: t.name, color: t.color, cost: t.cost }));
       el.paletteLabel.textContent = "Trap:";
     } else if (tool === "loot") {
       paletteKind = PALETTE_KIND.LOOT;
@@ -124,7 +130,7 @@ const BLINK_HIGH_PHASE = 2;
       sw.style.background = opt.color || "#1f2630";
       sw.title = opt.label;
       sw.dataset.value = opt.value;
-    sw.addEventListener("click", () => {
+      sw.addEventListener("click", () => {
         el.paletteGrid.querySelectorAll('.palette-swatch').forEach(n => n.classList.remove('selected'));
         sw.classList.add('selected');
         if (paletteKind === PALETTE_KIND.MOB) {
@@ -133,19 +139,35 @@ const BLINK_HIGH_PHASE = 2;
       const c = mob?.cost ?? COSTS.mob;
       el.paletteInfo.textContent = `${opt.label} — ${c} mana`;
       updateMobToolLabel(c);
+        } else if (paletteKind === PALETTE_KIND.TRAP) {
+          selectedTrapId = opt.value;
+          const trap = listTraps().find(t => t.id === selectedTrapId);
+          const c = trap?.cost ?? COSTS.trap;
+          el.paletteInfo.textContent = `${opt.label} — ${c} mana`;
+          updateTrapToolLabel(c);
         } else {
           el.paletteInfo.textContent = opt.label;
         }
       });
-      const isSelected = (paletteKind === PALETTE_KIND.MOB) ? (selectedMobId ? opt.value === selectedMobId : i === 0) : i === 0;
+      const isSelected = (paletteKind === PALETTE_KIND.MOB)
+        ? (selectedMobId ? opt.value === selectedMobId : i === 0)
+        : (paletteKind === PALETTE_KIND.TRAP)
+          ? (selectedTrapId ? opt.value === selectedTrapId : i === 0)
+          : i === 0;
       if (isSelected) {
         sw.classList.add('selected');
         if (paletteKind === PALETTE_KIND.MOB && !selectedMobId) selectedMobId = opt.value;
+        if (paletteKind === PALETTE_KIND.TRAP && !selectedTrapId) selectedTrapId = opt.value;
         if (paletteKind === PALETTE_KIND.MOB) {
           const mob = listMobs().find(m => m.id === selectedMobId);
           const c = mob?.cost ?? COSTS.mob;
           el.paletteInfo.textContent = `${opt.label} — ${c} mana`;
           updateMobToolLabel(c);
+        } else if (paletteKind === PALETTE_KIND.TRAP) {
+          const trap = listTraps().find(t => t.id === selectedTrapId);
+          const c = trap?.cost ?? COSTS.trap;
+          el.paletteInfo.textContent = `${opt.label} — ${c} mana`;
+          updateTrapToolLabel(c);
         } else {
           el.paletteInfo.textContent = opt.label || "";
         }
@@ -160,6 +182,10 @@ const BLINK_HIGH_PHASE = 2;
   function updateMobToolLabel(cost) {
     const mobBtn = document.querySelector('.toolbar button[data-tool="mob"]');
     if (mobBtn) mobBtn.textContent = `Mob (${cost})`;
+  }
+  function updateTrapToolLabel(cost) {
+    const trapBtn = document.querySelector('.toolbar button[data-tool="trap"]');
+    if (trapBtn) trapBtn.textContent = `Trap (${cost})`;
   }
 
   // Toolbar tool selection
@@ -346,13 +372,17 @@ const BLINK_HIGH_PHASE = 2;
       }
       return;
     }
-    if (tool in COSTS) {
-      // dynamic cost: for mobs, if a specific mob is selected, use its cost
+  if (tool in COSTS) {
+      // dynamic cost: for mobs and traps, if a specific type is selected, use its cost
       let cost = COSTS[tool];
       if (tool === "mob") {
         const mobDefs = listMobs();
         const chosen = (selectedMobId && mobDefs.find(m => m.id === selectedMobId)) || mobDefs[0];
         if (chosen?.cost != null) cost = chosen.cost;
+      } else if (tool === "trap") {
+    const traps = listTraps();
+    const chosenTrap = (selectedTrapId && traps.find(t => t.id === selectedTrapId)) || traps[0];
+    if (chosenTrap?.cost != null) cost = chosenTrap.cost;
       }
       if (mana < cost) { log(`Not enough mana for ${tool} (${cost})`); return; }
       let placed = false;
@@ -375,7 +405,19 @@ const BLINK_HIGH_PHASE = 2;
           }
         }
       }
-      else if (tool === "trap") { if (grid[y][x] === T.ROOM) { grid[y][x] = T.TRAP; placed = true; } }
+      else if (tool === "trap") {
+        if (grid[y][x] === T.ROOM) {
+          const traps = listTraps();
+          const chosenTrap = (selectedTrapId && traps.find(t => t.id === selectedTrapId)) || traps[0];
+          if (chosenTrap) {
+            grid[y][x] = T.TRAP;
+            trapType[y][x] = chosenTrap.id;
+            trapRearm[y][x] = 0;
+            placed = true;
+            log(`Placed trap: ${chosenTrap.name}`);
+          }
+        }
+      }
       else if (tool === "loot") { if (grid[y][x] === T.ROOM) { grid[y][x] = T.LOOT; placed = true; } }
       if (placed) { mana -= cost; updateUI(); }
     }
@@ -415,8 +457,15 @@ const BLINK_HIGH_PHASE = 2;
       box.appendChild(mobDiv);
     }
     if (t === T.TRAP) {
+      const id = trapType[selY][selX];
+      const def = getTrap(id);
+      const r = trapRearm[selY][selX] || 0;
       const trapDiv = document.createElement("div");
-      trapDiv.textContent = "Trap: Basic trap";
+      if (def) {
+        trapDiv.textContent = `Trap: ${def.name} [trigger ${(def.triggerChance*100)|0}% | hit ${(def.hitChance*100)|0}% | dmg ${def.minDmg}-${def.maxDmg} | rearm ${def.rearm} | ready in ${r}]`;
+      } else {
+        trapDiv.textContent = `Trap: Unknown (ready in ${r})`;
+      }
       box.appendChild(trapDiv);
     }
     if (t === T.LOOT) {
@@ -742,12 +791,22 @@ const BLINK_HIGH_PHASE = 2;
     if (t === T.MOB) {
       resolveCombatAt(party, m.x, m.y);
     }
-    if (t === T.TRAP && Math.random() < 0.35) {
-      const dmg = rnd(6, 12);
-      m.hp -= dmg;
-      mana += Math.floor(dmg / 3);
-      particles.push({ x: m.x, y: m.y, life: 10, color: "#ff5a47" });
-      if (Math.random() < 0.1) grid[m.y][m.x] = T.ROOM;
+    if (t === T.TRAP) {
+      const tid = trapType[m.y][m.x];
+      const def = getTrap(tid) || { triggerChance: 0.35, hitChance: 0.85, minDmg: 6, maxDmg: 12, rearm: 6, color: "#ff5a47" };
+      if (trapRearm[m.y][m.x] <= 0 && Math.random() < def.triggerChance) {
+        const hit = Math.random() < def.hitChance;
+        if (hit) {
+          const dmg = rnd(def.minDmg, def.maxDmg);
+          m.hp -= dmg;
+          mana += Math.floor(dmg / 3);
+          particles.push({ x: m.x, y: m.y, life: 10, color: def.color || "#ff5a47" });
+          log(`[Trap] ${def.name || "Trap"} at (${m.x},${m.y}) hits ${party.id} ${m.cls} for ${dmg} dmg.`);
+        } else {
+          log(`[Trap] ${def.name || "Trap"} at (${m.x},${m.y}) triggers but misses ${party.id} ${m.cls}.`);
+        }
+        trapRearm[m.y][m.x] = def.rearm || 6;
+      }
     }
     if (m.bleeding > 0) { m.bleeding--; m.hp -= 1; mana += 1; }
   }
@@ -1020,6 +1079,14 @@ const BLINK_HIGH_PHASE = 2;
             }
           }
         }
+        // trap rearm countdown
+        if (grid[y][x] === T.TRAP && trapRearm[y][x] > 0) {
+          trapRearm[y][x]--;
+          if (trapRearm[y][x] === 0) {
+            const def = getTrap(trapType[y][x]);
+            log(`[Trap] ${def?.name || "Trap"} at (${x},${y}) is re-armed.`);
+          }
+        }
       }
     }
 
@@ -1176,8 +1243,15 @@ const BLINK_HIGH_PHASE = 2;
       box.appendChild(mobDiv);
     }
     if (t === T.TRAP) {
+      const id = trapType[selY][selX];
+      const def = getTrap(id);
+      const r = trapRearm[selY][selX] || 0;
       const trapDiv = document.createElement("div");
-      trapDiv.textContent = "Trap: Basic trap";
+      if (def) {
+        trapDiv.textContent = `Trap: ${def.name} [trigger ${(def.triggerChance*100)|0}% | hit ${(def.hitChance*100)|0}% | dmg ${def.minDmg}-${def.maxDmg} | rearm ${def.rearm} | ready in ${r}]`;
+      } else {
+        trapDiv.textContent = `Trap: Unknown (ready in ${r})`;
+      }
       box.appendChild(trapDiv);
     }
     if (t === T.LOOT) {
@@ -1223,7 +1297,10 @@ const BLINK_HIGH_PHASE = 2;
           const def = getMob(mobType[y][x] || "slime");
           drawDot(x, y, def?.color || "#47ff88");
         }
-        if (t === T.TRAP) { drawDot(x, y, "#ff5a47"); }
+        if (t === T.TRAP) {
+          const def = getTrap(trapType[y][x]);
+          drawDot(x, y, def?.color || "#ff5a47");
+        }
         if (t === T.LOOT) { drawDot(x, y, "#ffd447"); }
         if (t === T.ENTRANCE) { drawDot(x, y, "#7cc1ff"); }
         if (t === T.EXIT) { drawDot(x, y, "#b084ff"); }
@@ -1409,6 +1486,15 @@ const BLINK_HIGH_PHASE = 2;
   } else {
     const first = listMobs()[0];
     if (first) updateMobToolLabel(first.cost ?? COSTS.mob);
+  }
+  // Precompute trap tool label as well
+  if (selectedTrapId) {
+    const trap = listTraps().find(t => t.id === selectedTrapId);
+    const c = trap?.cost ?? COSTS.trap;
+    updateTrapToolLabel(c);
+  } else {
+    const firstTrap = listTraps()[0];
+    if (firstTrap) updateTrapToolLabel(firstTrap.cost ?? COSTS.trap);
   }
   loop();
   render();
