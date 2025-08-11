@@ -28,6 +28,10 @@ const BLINK_HIGH_PHASE = 2;
   let killBoostActive = 0;
   // Hover state for build preview
   let hoverX = -1, hoverY = -1;
+  // Drag-build state for room placement
+  let isMouseDown = false;
+  let lastPlacedX = -1, lastPlacedY = -1;
+  let suppressNextClickForRoom = false;
   // Blink overlays for invalid actions
   let blinks = [];
 
@@ -103,8 +107,41 @@ const BLINK_HIGH_PHASE = 2;
     const y = Math.floor((e.clientY - rect.top) / TILE);
     if (x >= 0 && y >= 0 && x < GRID_W && y < GRID_H) { hoverX = x; hoverY = y; }
     else { hoverX = -1; hoverY = -1; }
+    // Drag-to-build for rooms: place as we move while mouse is down
+    if (isMouseDown && tool === "room" && x >= 0 && y >= 0 && x < GRID_W && y < GRID_H) {
+      if (x !== lastPlacedX || y !== lastPlacedY) {
+        tryPlaceRoom(x, y);
+        lastPlacedX = x; lastPlacedY = y;
+      }
+    }
   });
-  el.grid.addEventListener("mouseleave", () => { hoverX = -1; hoverY = -1; });
+  el.grid.addEventListener("mouseleave", () => { hoverX = -1; hoverY = -1; isMouseDown = false; });
+  el.grid.addEventListener("mousedown", (e) => {
+    const rect = el.grid.getBoundingClientRect();
+    const x = Math.floor((e.clientX - rect.left) / TILE);
+    const y = Math.floor((e.clientY - rect.top) / TILE);
+    if (x < 0 || y < 0 || x >= GRID_W || y >= GRID_H) return;
+    isMouseDown = true;
+    lastPlacedX = -1; lastPlacedY = -1;
+    if (tool === "room") {
+      // For room tool, start placement on mousedown to enable smooth dragging
+      const placed = tryPlaceRoom(x, y);
+      suppressNextClickForRoom = !!placed;
+      lastPlacedX = x; lastPlacedY = y;
+      e.preventDefault();
+    }
+  });
+  window.addEventListener("mouseup", () => { isMouseDown = false; });
+
+  function tryPlaceRoom(x, y) {
+    if (mana < COSTS.room) return false;
+    if (!canPlace("room", x, y)) return false; // do not blink on drag; just skip
+    if (grid[y][x] === T.ROOM) return false; // nothing to do
+    grid[y][x] = T.ROOM;
+    mana -= COSTS.room;
+    updateUI();
+    return true;
+  }
 
   // ----- Utilities -----
   function log(msg) {
@@ -191,6 +228,8 @@ const BLINK_HIGH_PHASE = 2;
     const x = Math.floor((e.clientX - rect.left) / TILE);
     const y = Math.floor((e.clientY - rect.top) / TILE);
     if (x < 0 || y < 0 || x >= GRID_W || y >= GRID_H) return;
+    // Suppress the trailing click after a drag-based room placement
+    if (tool === "room" && suppressNextClickForRoom) { suppressNextClickForRoom = false; return; }
     const current = grid[y][x];
     if (tool === "erase") {
       if (current === T.ENTRANCE || current === T.EXIT) {
@@ -816,15 +855,13 @@ const BLINK_HIGH_PHASE = 2;
         } else if (mobRespawn[y][x] > 0) {
           mobRespawn[y][x]--;
           if (mobRespawn[y][x] <= 0) {
-            const cost = Math.floor(COSTS.mob * MOB_RESPAWN_COST_FRAC);
             const mobDefs = listMobs();
             const chosen = mobDefs[Math.floor(Math.random() * mobDefs.length)];
-            if (mana >= cost && chosen && grid[y][x] === T.ROOM) {
-              mana -= cost;
+            if (chosen && grid[y][x] === T.ROOM) {
               grid[y][x] = T.MOB;
               mobType[y][x] = chosen.id;
               mobHp[y][x] = chosen.maxHp;
-              log(`[Respawn] ${chosen.name} returns at (${x},${y}). (-${cost} mana)`);
+              log(`[Respawn] ${chosen.name} returns at (${x},${y}).`);
             } else {
               // retry next tick
               mobRespawn[y][x] = 1;
