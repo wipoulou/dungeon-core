@@ -1,7 +1,8 @@
 import { GRID_W, GRID_H, TILE, STARTING_MANA, COSTS, SPAWN_RATE, MAX_ADVENTURERS, POLITICAL_RAID_THRESHOLD, ECON_RAID_THRESHOLD, STORAGE_KEY, T, isWalkableType } from "./src/constants.js";
-import { MobRegistry, getMob, listMobs } from "./src/mobs.js";
+import { getMob, listMobs } from "./src/mobs.js";
 import { listTraps, getTrap } from "./src/traps.js";
 import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
+import { nextStepForMember } from "./src/party_ai.js";
 
 // Blink overlay constants for invalid actions
 const BLINK_CYCLE_FRAMES = 4;
@@ -81,11 +82,11 @@ const BLINK_HIGH_PHASE = 2;
     clearMemory: document.getElementById("clearMemory"),
     forgetSelected: document.getElementById("forgetSelected"),
     highlightToggle: document.getElementById("highlightToggle"),
-  partyInspector: document.getElementById("partyInspector"),
-  tileInspector: document.getElementById("tileInspector"),
-  paletteLabel: document.getElementById("paletteLabel"),
-  paletteInfo: document.getElementById("paletteInfo"),
-  paletteGrid: document.getElementById("paletteGrid"),
+    partyInspector: document.getElementById("partyInspector"),
+    tileInspector: document.getElementById("tileInspector"),
+    paletteLabel: document.getElementById("paletteLabel"),
+    paletteInfo: document.getElementById("paletteInfo"),
+    paletteGrid: document.getElementById("paletteGrid"),
   };
 
   // Highlight the active tool button in the toolbar
@@ -134,11 +135,11 @@ const BLINK_HIGH_PHASE = 2;
         el.paletteGrid.querySelectorAll('.palette-swatch').forEach(n => n.classList.remove('selected'));
         sw.classList.add('selected');
         if (paletteKind === PALETTE_KIND.MOB) {
-      selectedMobId = opt.value;
-      const mob = listMobs().find(m => m.id === selectedMobId);
-      const c = mob?.cost ?? COSTS.mob;
-      el.paletteInfo.textContent = `${opt.label} — ${c} mana`;
-      updateMobToolLabel(c);
+          selectedMobId = opt.value;
+          const mob = listMobs().find(m => m.id === selectedMobId);
+          const c = mob?.cost ?? COSTS.mob;
+          el.paletteInfo.textContent = `${opt.label} — ${c} mana`;
+          updateMobToolLabel(c);
         } else if (paletteKind === PALETTE_KIND.TRAP) {
           selectedTrapId = opt.value;
           const trap = listTraps().find(t => t.id === selectedTrapId);
@@ -398,7 +399,7 @@ const BLINK_HIGH_PHASE = 2;
       }
       return;
     }
-  if (tool in COSTS) {
+    if (tool in COSTS) {
       // dynamic cost: for mobs and traps, if a specific type is selected, use its cost
       let cost = COSTS[tool];
       if (tool === "mob") {
@@ -406,9 +407,9 @@ const BLINK_HIGH_PHASE = 2;
         const chosen = (selectedMobId && mobDefs.find(m => m.id === selectedMobId)) || mobDefs[0];
         if (chosen?.cost != null) cost = chosen.cost;
       } else if (tool === "trap") {
-    const traps = listTraps();
-    const chosenTrap = (selectedTrapId && traps.find(t => t.id === selectedTrapId)) || traps[0];
-    if (chosenTrap?.cost != null) cost = chosenTrap.cost;
+        const traps = listTraps();
+        const chosenTrap = (selectedTrapId && traps.find(t => t.id === selectedTrapId)) || traps[0];
+        if (chosenTrap?.cost != null) cost = chosenTrap.cost;
       }
       if (mana < cost) { log(`Not enough mana for ${tool} (${cost})`); return; }
       let placed = false;
@@ -488,7 +489,7 @@ const BLINK_HIGH_PHASE = 2;
       const r = trapRearm[selY][selX] || 0;
       const trapDiv = document.createElement("div");
       if (def) {
-        trapDiv.textContent = `Trap: ${def.name} [trigger ${(def.triggerChance*100)|0}% | hit ${(def.hitChance*100)|0}% | dmg ${def.minDmg}-${def.maxDmg} | rearm ${def.rearm} | ready in ${r}]`;
+        trapDiv.textContent = `Trap: ${def.name} [trigger ${(def.triggerChance * 100) | 0}% | hit ${(def.hitChance * 100) | 0}% | dmg ${def.minDmg}-${def.maxDmg} | rearm ${def.rearm} | ready in ${r}]`;
       } else {
         trapDiv.textContent = `Trap: Unknown (ready in ${r})`;
       }
@@ -696,114 +697,6 @@ const BLINK_HIGH_PHASE = 2;
 
   // ----- Pathing -----
   function tileAt(x, y) { return grid[y][x]; }
-
-  function aStar(party, start, goal, allowDanger = true) {
-    const { knowledge } = party;
-    const key = (x, y) => `${x},${y}`;
-    const open = new Set([key(start.x, start.y)]);
-    const came = new Map();
-    const g = new Map([[key(start.x, start.y), 0]]);
-    const h = (x, y) => Math.abs(x - goal.x) + Math.abs(y - goal.y);
-    const f = new Map([[key(start.x, start.y), h(start.x, start.y)]]);
-
-    function lowestF() {
-      let bestK = null, best = Infinity;
-      for (const k of open) {
-        const val = f.get(k) ?? Infinity;
-        if (val < best) { best = val; bestK = k; }
-      }
-      return bestK;
-    }
-
-    while (open.size) {
-      const currentK = lowestF();
-      const [cx, cy] = currentK.split(",").map(Number);
-      if (cx === goal.x && cy === goal.y) {
-        const path = [{ x: cx, y: cy }];
-        let k = currentK;
-        while (came.has(k)) {
-          k = came.get(k);
-          const [px, py] = k.split(",").map(Number);
-          path.push({ x: px, y: py });
-        }
-        path.reverse();
-        return path;
-      }
-      open.delete(currentK);
-      const cand = neighbors(cx, cy);
-      for (const [nx, ny] of cand) {
-        const row = knowledge[ny];
-        const cell = row && row[nx];
-        if (!cell || !cell.seen) continue;
-        if (!isWalkableType(cell.type)) continue;
-        const stepCost = 1 + (allowDanger ? cell.danger : 0);
-        const tentative = (g.get(currentK) ?? Infinity) + stepCost;
-        const nk = key(nx, ny);
-        if (tentative < (g.get(nk) ?? Infinity)) {
-          came.set(nk, currentK);
-          g.set(nk, tentative);
-          f.set(nk, tentative + h(nx, ny));
-          open.add(nk);
-        }
-      }
-    }
-    return null;
-  }
-
-  function chooseTarget(party) {
-    if (party.exitKnown && party.exitPos) { return { type: "exit", pos: party.exitPos }; }
-    let best = null, bestDist = Infinity, bestAdj = null;
-    for (let y = 0; y < GRID_H; y++) {
-      for (let x = 0; x < GRID_W; x++) {
-        const cell = party.knowledge[y][x];
-        if (cell.seen) continue;
-        const options = neighbors(x, y).filter(([ax, ay]) => {
-          const c = party.knowledge[ay][ax];
-          return c.seen && isWalkableType(c.type);
-        });
-        if (!options.length) continue;
-        const mx = Math.round(party.members.reduce((s, m) => s + m.x, 0) / party.members.length);
-        const my = Math.round(party.members.reduce((s, m) => s + m.y, 0) / party.members.length);
-        const d = Math.abs(mx - x) + Math.abs(my - y);
-        if (d < bestDist) {
-          bestDist = d;
-          best = { x, y };
-          const [ax, ay] = options[0];
-          bestAdj = { x: ax, y: ay };
-        }
-      }
-    }
-    if (best) return { type: "frontier", pos: bestAdj };
-    return null;
-  }
-
-  function nextStepForMember(party, m) {
-    const target = chooseTarget(party);
-    let goal = target ? target.pos : null;
-    if (!goal && party.exitKnown) goal = party.exitPos;
-    let step = null;
-    if (goal) {
-      const path = aStar(party, { x: m.x, y: m.y }, goal, true);
-      if (path && path.length >= 2) { step = path[1]; }
-    }
-    if (!step) {
-      const options = neighbors(m.x, m.y).filter(([ax, ay]) => isWalkableType(tileAt(ax, ay)));
-      if (options.length) {
-        options.sort((A, B) => {
-          const [ax, ay] = A, [bx, by] = B;
-          const ca = party.knowledge[ay][ax], cb = party.knowledge[by][bx];
-          const scoreA = (ca.seen ? 0 : -1) + (ca.danger ? -ca.danger : 0);
-          const scoreB = (cb.seen ? 0 : -1) + (cb.danger ? -cb.danger : 0);
-          return scoreB - scoreA + (Math.random() < 0.3 ? rnd(-1, 1) : 0);
-        });
-        const [nx, ny] = options[0];
-        step = { x: nx, y: ny };
-      } else {
-        step = { x: m.x, y: m.y };
-      }
-    }
-    return step;
-  }
 
   // ----- Interactions -----
   function interact(party, m) {
@@ -1056,14 +949,14 @@ const BLINK_HIGH_PHASE = 2;
       // Single step per party
       reveal(p);
       const step = nextStepForMember(p, leader);
-  if (step) {
+      if (step) {
         // remember last position for flee
         p.lastPos = { x: leader.x, y: leader.y };
         p.members.forEach(m => { if (m.hp > 0) { m.x = step.x; m.y = step.y; } });
       }
       reveal(p);
-  // Quick check to drink potions outside combat
-  p.members.forEach(m => { if (m.hp > 0) maybeUsePotion(p, m); });
+      // Quick check to drink potions outside combat
+      p.members.forEach(m => { if (m.hp > 0) maybeUsePotion(p, m); });
       // One interaction per party at leader tile
       interact(p, leader);
       // Bleed ticks for other alive members
@@ -1223,8 +1116,8 @@ const BLINK_HIGH_PHASE = 2;
     members.forEach((m, i) => {
       const row = document.createElement("div");
       const hpPct = Math.max(0, Math.round((m.hp / m.maxhp) * 100));
-  const potStr = m.potion ? ` potion:${m.potion.tier}` : "";
-  row.textContent = `#${i + 1} L${m.level} ${m.cls} [HP ${m.hp}/${m.maxhp} ${hpPct}% | MP ${m.mp}] trait: ${m.trait} @(${m.x},${m.y}) loot:${m.loot} items:${m.inv}/${m.invMax} coins:${m.coins}${potStr}`;
+      const potStr = m.potion ? ` potion:${m.potion.tier}` : "";
+      row.textContent = `#${i + 1} L${m.level} ${m.cls} [HP ${m.hp}/${m.maxhp} ${hpPct}% | MP ${m.mp}] trait: ${m.trait} @(${m.x},${m.y}) loot:${m.loot} items:${m.inv}/${m.invMax} coins:${m.coins}${potStr}`;
       list.appendChild(row);
     });
     container.appendChild(list);
@@ -1313,7 +1206,7 @@ const BLINK_HIGH_PHASE = 2;
       const r = trapRearm[selY][selX] || 0;
       const trapDiv = document.createElement("div");
       if (def) {
-        trapDiv.textContent = `Trap: ${def.name} [trigger ${(def.triggerChance*100)|0}% | hit ${(def.hitChance*100)|0}% | dmg ${def.minDmg}-${def.maxDmg} | rearm ${def.rearm} | ready in ${r}]`;
+        trapDiv.textContent = `Trap: ${def.name} [trigger ${(def.triggerChance * 100) | 0}% | hit ${(def.hitChance * 100) | 0}% | dmg ${def.minDmg}-${def.maxDmg} | rearm ${def.rearm} | ready in ${r}]`;
       } else {
         trapDiv.textContent = `Trap: Unknown (ready in ${r})`;
       }
@@ -1387,11 +1280,11 @@ const BLINK_HIGH_PHASE = 2;
       else if (tool === "mob") color = "#102c20";
       else if (tool === "trap") color = "#2a1616";
       else if (tool === "loot") color = "#2a2410";
-  else if (tool === "erase") color = "#333";
-  else if (tool === "inspect") color = "#364152";
+      else if (tool === "erase") color = "#333";
+      else if (tool === "inspect") color = "#364152";
       if (!valid) color = "#6b2222";
       ctx.save();
-  ctx.globalAlpha = tool === "inspect" ? 0.25 : 0.45;
+      ctx.globalAlpha = tool === "inspect" ? 0.25 : 0.45;
       ctx.fillStyle = color;
       ctx.fillRect(hoverX * TILE, hoverY * TILE, TILE - 1, TILE - 1);
       if (!valid) {
