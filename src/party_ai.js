@@ -135,3 +135,18 @@ export function nextStepForMember(party, m) {
     }
     return step;
 }
+
+// Decide and consume a potion if needed; mutates member and returns result for the caller to apply side-effects (mana/log/particles)
+export function maybeUsePotion(party, m) {
+    if (!m || m.hp <= 0 || !m.potion) return { consumed: false, healed: 0, tier: null };
+    if ((m.hp / m.maxhp) <= 0.5) {
+        const p = m.potion;
+        const before = m.hp;
+        const heal = Math.max(0, p.heal || 12);
+        m.hp = Math.min(m.maxhp, m.hp + heal);
+        const healed = m.hp - before;
+        m.potion = null;
+        return { consumed: healed > 0, healed, tier: p.tier || "Potion" };
+    }
+    return { consumed: false, healed: 0, tier: null };
+}

@@ -2,7 +2,8 @@ import { GRID_W, GRID_H, TILE, STARTING_MANA, COSTS, SPAWN_RATE, MAX_ADVENTURERS
 import { getMob, listMobs } from "./src/mobs.js";
 import { listTraps, getTrap } from "./src/traps.js";
 import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
-import { nextStepForMember } from "./src/party_ai.js";
+import { nextStepForMember, maybeUsePotion as aiMaybeUsePotion } from "./src/party_ai.js";
+import { neighbors, rnd, getTileAt as utilGetTileAt, hasPathIfRemoved as utilHasPathIfRemoved, tileTypeName as utilTileTypeName, drawDot as utilDrawDot } from "./src/utils.js";
 
 // Blink overlay constants for invalid actions
 const BLINK_CYCLE_FRAMES = 4;
@@ -259,12 +260,7 @@ const BLINK_HIGH_PHASE = 2;
     el.log.appendChild(line);
     el.log.scrollTop = el.log.scrollHeight;
   }
-  function neighbors(x, y) { return [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]].filter(([a, b]) => a >= 0 && a < GRID_W && b >= 0 && b < GRID_H); }
-  function rnd(a, b) { return Math.floor(Math.random() * (b - a + 1)) + a; }
-  function getTileAt(x, y) {
-    if (x < 0 || y < 0 || x >= GRID_W || y >= GRID_H) return T.WALL;
-    return grid[y][x];
-  }
+  const getTileAt = (x, y) => utilGetTileAt(grid, x, y);
 
   // Potion helpers
   function makePotion() {
@@ -274,72 +270,17 @@ const BLINK_HIGH_PHASE = 2;
     return { kind: "healing", tier: "Greater", heal: 32 };
   }
   function maybeUsePotion(party, m) {
-    if (!m || m.hp <= 0 || !m.potion) return false;
-    // Use if at or below 50% HP
-    if ((m.hp / m.maxhp) <= 0.5) {
-      const p = m.potion;
-      const before = m.hp;
-      m.hp = Math.min(m.maxhp, m.hp + (p.heal || 12));
-      const healed = m.hp - before;
-      if (healed > 0) {
-        mana += Math.floor(healed / 2);
-        particles.push({ x: m.x, y: m.y, life: 10, color: "#8dd0ff" });
-        log(`[Potion] ${party.id} ${m.cls} drinks ${p.tier || "Potion"} (+${healed} HP).`);
-      }
-      m.potion = null;
+    const res = aiMaybeUsePotion(party, m);
+    if (res.consumed && res.healed > 0) {
+      mana += Math.floor(res.healed / 2);
+      particles.push({ x: m.x, y: m.y, life: 10, color: "#8dd0ff" });
+      log(`[Potion] ${party.id} ${m.cls} drinks ${res.tier} (+${res.healed} HP).`);
       return true;
     }
     return false;
   }
 
-  function findEntranceExit() {
-    let ent = null, ext = null;
-    for (let y = 0; y < GRID_H; y++) {
-      for (let x = 0; x < GRID_W; x++) {
-        const t = grid[y][x];
-        if (t === T.ENTRANCE) ent = { x, y };
-        if (t === T.EXIT) ext = { x, y };
-      }
-    }
-    return { ent, ext };
-  }
-
-  function hasPathIfRemoved(rx, ry) {
-    const { ent, ext } = findEntranceExit();
-    if (!ent || !ext) return false; // fail-closed
-    // helper BFS from entrance, optionally skipping one tile as if it were a wall
-    function bfs(skipX = null, skipY = null) {
-      const q = [ent];
-      const seen = new Set([`${ent.x},${ent.y}`]);
-      while (q.length) {
-        const cur = q.shift();
-        // Early exit if we reach the exit position
-        if (cur.x === ext.x && cur.y === ext.y) break;
-        for (const [nx, ny] of neighbors(cur.x, cur.y)) {
-          if (skipX === nx && skipY === ny) continue;
-          const t = grid[ny][nx];
-          if (!isWalkableType(t)) continue;
-          const k = `${nx},${ny}`;
-          if (!seen.has(k)) { seen.add(k); q.push({ x: nx, y: ny }); }
-        }
-      }
-      return seen;
-    }
-    const reachableNow = bfs();
-    // Only allow removal if exit is currently reachable
-    if (!reachableNow.has(`${ext.x},${ext.y}`)) return false;
-    const reachableAfter = bfs(rx, ry);
-    // must still reach exit
-    if (!reachableAfter.has(`${ext.x},${ext.y}`)) return false;
-    // ensure we didn't strand any walkable tile that was reachable before (except the removed tile itself)
-    for (const key of reachableNow) {
-      if (key === `${rx},${ry}`) continue;
-      const [kx, ky] = key.split(",").map(Number);
-      if (!isWalkableType(grid[ky][kx])) continue; // ignore if it changed to non-walkable (shouldn't happen here)
-      if (!reachableAfter.has(key)) return false;
-    }
-    return true;
-  }
+  const hasPathIfRemoved = (rx, ry) => utilHasPathIfRemoved(grid, rx, ry);
 
   // ----- Build Interaction -----
   function canPlace(toolName, x, y) {
@@ -450,17 +391,7 @@ const BLINK_HIGH_PHASE = 2;
     }
   });
 
-  function tileTypeName(t) {
-    return {
-      [T.WALL]: "Wall",
-      [T.ROOM]: "Room",
-      [T.MOB]: "Mob",
-      [T.TRAP]: "Trap",
-      [T.LOOT]: "Loot",
-      [T.ENTRANCE]: "Entrance",
-      [T.EXIT]: "Teleporter",
-    }[t] || "Unknown";
-  }
+  const tileTypeName = (t) => utilTileTypeName(t);
 
   function updateTileInspector() {
     const box = el.tileInspector;
@@ -1419,13 +1350,7 @@ const BLINK_HIGH_PHASE = 2;
     requestAnimationFrame(render);
   }
 
-  function drawDot(x, y, color) {
-    const c = ctx;
-    c.fillStyle = color;
-    c.beginPath();
-    c.arc(x * TILE + TILE / 2, y * TILE + TILE / 2, 5, 0, Math.PI * 2);
-    c.fill();
-  }
+  function drawDot(x, y, color) { utilDrawDot(ctx, x, y, color, TILE); }
 
   function loop() { if (running) advance(); setTimeout(loop, 150); }
 
