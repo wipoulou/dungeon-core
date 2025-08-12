@@ -18,14 +18,27 @@
         <div><strong>Guard Tension:</strong> <span id="tension">Calm</span></div>
       </div>
 
-      <h2>Build</h2>
+      <h2>Tools</h2>
       <div class="toolbar">
+        <button data-tool="inspect">Inspect</button>
         <button data-tool="room">Room (5)</button>
         <button data-tool="mob">Mob (15)</button>
         <button data-tool="trap">Trap (20)</button>
         <button data-tool="loot">Loot Node (10)</button>
         <button data-tool="erase">Erase</button>
       </div>
+
+      <h2>Palette</h2>
+      <div class="palette">
+        <div class="row" style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+          <span id="paletteLabel">Pick:</span>
+          <div id="paletteGrid" class="palette-grid" aria-label="Palette options"></div>
+        </div>
+        <div id="paletteInfo" style="font-size:12px; color:#9fb3c8;"></div>
+      </div>
+
+      <h2>Inspector</h2>
+      <div id="tileInspector" class="log" style="height:auto; max-height: 180px;"></div>
 
 
       <h2>Cult</h2>

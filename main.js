@@ -1,5 +1,6 @@
 import { GRID_W, GRID_H, TILE, STARTING_MANA, COSTS, SPAWN_RATE, MAX_ADVENTURERS, POLITICAL_RAID_THRESHOLD, ECON_RAID_THRESHOLD, STORAGE_KEY, T, isWalkableType } from "./src/constants.js";
 import { MobRegistry, getMob, listMobs } from "./src/mobs.js";
+import { listTraps, getTrap } from "./src/traps.js";
 import { makeMember, ClassRegistry, getClassSkills } from "./src/classes.js";
 
 // Blink overlay constants for invalid actions
@@ -17,7 +18,7 @@ const BLINK_HIGH_PHASE = 2;
   let politicalRisk = 0;
   let economicPressure = 0;
   let running = false;
-  let tool = "room";
+  let tool = "inspect";
   let adventurers = [];
   let particles = [];
   let killsLastWindow = 0;
@@ -28,6 +29,8 @@ const BLINK_HIGH_PHASE = 2;
   let killBoostActive = 0;
   // Hover state for build preview
   let hoverX = -1, hoverY = -1;
+  // Selected tile for tile inspector
+  let selX = -1, selY = -1;
   // Drag-build state for room placement
   let isMouseDown = false;
   let lastPlacedX = -1, lastPlacedY = -1;
@@ -47,6 +50,9 @@ const BLINK_HIGH_PHASE = 2;
   const mobType = Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => null)); // string mob id
   // mob respawn timers (ticks until respawn), 0 when not pending
   const mobRespawn = Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => 0));
+  // typed trap support: store trap id and rearm timers
+  const trapType = Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => null));
+  const trapRearm = Array.from({ length: GRID_H }, () => Array.from({ length: GRID_W }, () => 0));
 
   // Pre-place entrance + exit
   grid[Math.floor(GRID_H / 2)][1] = T.ENTRANCE;
@@ -75,17 +81,119 @@ const BLINK_HIGH_PHASE = 2;
     clearMemory: document.getElementById("clearMemory"),
     forgetSelected: document.getElementById("forgetSelected"),
     highlightToggle: document.getElementById("highlightToggle"),
-    partyInspector: document.getElementById("partyInspector"),
+  partyInspector: document.getElementById("partyInspector"),
+  tileInspector: document.getElementById("tileInspector"),
+  paletteLabel: document.getElementById("paletteLabel"),
+  paletteInfo: document.getElementById("paletteInfo"),
+  paletteGrid: document.getElementById("paletteGrid"),
   };
 
+  // Highlight the active tool button in the toolbar
   function updateToolSelection() {
     document.querySelectorAll('.toolbar button[data-tool]').forEach(btn => {
       btn.classList.toggle('selected', btn.dataset.tool === tool);
     });
   }
+  // Palette state and swatch-grid rendering
+  const PALETTE_KIND = { NONE: "none", MOB: "mob", TRAP: "trap", LOOT: "loot" };
+  let paletteKind = PALETTE_KIND.NONE;
+  let selectedMobId = null;
+  let selectedTrapId = null;
+
+  function refreshPaletteForTool() {
+    if (!el.paletteGrid) return;
+    let options = [];
+    if (tool === "mob") {
+      paletteKind = PALETTE_KIND.MOB;
+      const mobs = listMobs();
+      options = mobs.map(m => ({ value: m.id, label: m.name, color: m.color }));
+      el.paletteLabel.textContent = "Mob:";
+    } else if (tool === "trap") {
+      paletteKind = PALETTE_KIND.TRAP;
+      const traps = listTraps();
+      options = traps.map(t => ({ value: t.id, label: t.name, color: t.color, cost: t.cost }));
+      el.paletteLabel.textContent = "Trap:";
+    } else if (tool === "loot") {
+      paletteKind = PALETTE_KIND.LOOT;
+      options = [{ value: "basic", label: "Loot Node", color: "#ffd447" }];
+      el.paletteLabel.textContent = "Loot:";
+    } else {
+      paletteKind = PALETTE_KIND.NONE;
+      options = [];
+      el.paletteLabel.textContent = "Pick:";
+    }
+    el.paletteGrid.innerHTML = "";
+    options.forEach((opt, i) => {
+      const sw = document.createElement("button");
+      sw.type = "button";
+      sw.className = "palette-swatch";
+      sw.style.background = opt.color || "#1f2630";
+      sw.title = opt.label;
+      sw.dataset.value = opt.value;
+      sw.addEventListener("click", () => {
+        el.paletteGrid.querySelectorAll('.palette-swatch').forEach(n => n.classList.remove('selected'));
+        sw.classList.add('selected');
+        if (paletteKind === PALETTE_KIND.MOB) {
+      selectedMobId = opt.value;
+      const mob = listMobs().find(m => m.id === selectedMobId);
+      const c = mob?.cost ?? COSTS.mob;
+      el.paletteInfo.textContent = `${opt.label} — ${c} mana`;
+      updateMobToolLabel(c);
+        } else if (paletteKind === PALETTE_KIND.TRAP) {
+          selectedTrapId = opt.value;
+          const trap = listTraps().find(t => t.id === selectedTrapId);
+          const c = trap?.cost ?? COSTS.trap;
+          el.paletteInfo.textContent = `${opt.label} — ${c} mana`;
+          updateTrapToolLabel(c);
+        } else {
+          el.paletteInfo.textContent = opt.label;
+        }
+      });
+      const isSelected = (paletteKind === PALETTE_KIND.MOB)
+        ? (selectedMobId ? opt.value === selectedMobId : i === 0)
+        : (paletteKind === PALETTE_KIND.TRAP)
+          ? (selectedTrapId ? opt.value === selectedTrapId : i === 0)
+          : i === 0;
+      if (isSelected) {
+        sw.classList.add('selected');
+        if (paletteKind === PALETTE_KIND.MOB && !selectedMobId) selectedMobId = opt.value;
+        if (paletteKind === PALETTE_KIND.TRAP && !selectedTrapId) selectedTrapId = opt.value;
+        if (paletteKind === PALETTE_KIND.MOB) {
+          const mob = listMobs().find(m => m.id === selectedMobId);
+          const c = mob?.cost ?? COSTS.mob;
+          el.paletteInfo.textContent = `${opt.label} — ${c} mana`;
+          updateMobToolLabel(c);
+        } else if (paletteKind === PALETTE_KIND.TRAP) {
+          const trap = listTraps().find(t => t.id === selectedTrapId);
+          const c = trap?.cost ?? COSTS.trap;
+          el.paletteInfo.textContent = `${opt.label} — ${c} mana`;
+          updateTrapToolLabel(c);
+        } else {
+          el.paletteInfo.textContent = opt.label || "";
+        }
+      }
+      el.paletteGrid.appendChild(sw);
+    });
+    if (options.length === 0) {
+      el.paletteInfo.textContent = "";
+    }
+  }
+
+  function updateMobToolLabel(cost) {
+    const mobBtn = document.querySelector('.toolbar button[data-tool="mob"]');
+    if (mobBtn) mobBtn.textContent = `Mob (${cost})`;
+  }
+  function updateTrapToolLabel(cost) {
+    const trapBtn = document.querySelector('.toolbar button[data-tool="trap"]');
+    if (trapBtn) trapBtn.textContent = `Trap (${cost})`;
+  }
+
+  // Toolbar tool selection
   document.querySelectorAll('.toolbar button[data-tool]').forEach(b => {
-    b.addEventListener('click', () => { tool = b.dataset.tool; updateToolSelection(); });
+    b.addEventListener('click', () => { tool = b.dataset.tool; updateToolSelection(); updateTileInspector(); refreshPaletteForTool(); });
   });
+
+  // Sim buttons and toggles
   el.start.onclick = () => running = true;
   el.pause.onclick = () => running = false;
   el.step.onclick = () => { running = false; advance(); render(); };
@@ -155,6 +263,32 @@ const BLINK_HIGH_PHASE = 2;
   function getTileAt(x, y) {
     if (x < 0 || y < 0 || x >= GRID_W || y >= GRID_H) return T.WALL;
     return grid[y][x];
+  }
+
+  // Potion helpers
+  function makePotion() {
+    const r = Math.random();
+    if (r < 0.6) return { kind: "healing", tier: "Minor", heal: 12 };
+    if (r < 0.9) return { kind: "healing", tier: "Standard", heal: 20 };
+    return { kind: "healing", tier: "Greater", heal: 32 };
+  }
+  function maybeUsePotion(party, m) {
+    if (!m || m.hp <= 0 || !m.potion) return false;
+    // Use if at or below 50% HP
+    if ((m.hp / m.maxhp) <= 0.5) {
+      const p = m.potion;
+      const before = m.hp;
+      m.hp = Math.min(m.maxhp, m.hp + (p.heal || 12));
+      const healed = m.hp - before;
+      if (healed > 0) {
+        mana += Math.floor(healed / 2);
+        particles.push({ x: m.x, y: m.y, life: 10, color: "#8dd0ff" });
+        log(`[Potion] ${party.id} ${m.cls} drinks ${p.tier || "Potion"} (+${healed} HP).`);
+      }
+      m.potion = null;
+      return true;
+    }
+    return false;
   }
 
   function findEntranceExit() {
@@ -228,6 +362,11 @@ const BLINK_HIGH_PHASE = 2;
     const x = Math.floor((e.clientX - rect.left) / TILE);
     const y = Math.floor((e.clientY - rect.top) / TILE);
     if (x < 0 || y < 0 || x >= GRID_W || y >= GRID_H) return;
+    if (tool === "inspect") {
+      selX = x; selY = y;
+      updateTileInspector();
+      return;
+    }
     // Suppress the trailing click after a drag-based room placement
     if (tool === "room" && suppressNextClickForRoom) { suppressNextClickForRoom = false; return; }
     const current = grid[y][x];
@@ -259,8 +398,18 @@ const BLINK_HIGH_PHASE = 2;
       }
       return;
     }
-    if (tool in COSTS) {
-      const cost = COSTS[tool];
+  if (tool in COSTS) {
+      // dynamic cost: for mobs and traps, if a specific type is selected, use its cost
+      let cost = COSTS[tool];
+      if (tool === "mob") {
+        const mobDefs = listMobs();
+        const chosen = (selectedMobId && mobDefs.find(m => m.id === selectedMobId)) || mobDefs[0];
+        if (chosen?.cost != null) cost = chosen.cost;
+      } else if (tool === "trap") {
+    const traps = listTraps();
+    const chosenTrap = (selectedTrapId && traps.find(t => t.id === selectedTrapId)) || traps[0];
+    if (chosenTrap?.cost != null) cost = chosenTrap.cost;
+      }
       if (mana < cost) { log(`Not enough mana for ${tool} (${cost})`); return; }
       let placed = false;
       if (!canPlace(tool, x, y)) {
@@ -272,7 +421,7 @@ const BLINK_HIGH_PHASE = 2;
       else if (tool === "mob") {
         if (grid[y][x] === T.ROOM) {
           const mobDefs = listMobs();
-          const chosen = mobDefs[Math.floor(Math.random() * mobDefs.length)];
+          const chosen = (selectedMobId && mobDefs.find(m => m.id === selectedMobId)) || mobDefs[0];
           if (chosen) {
             grid[y][x] = T.MOB;
             mobType[y][x] = chosen.id;
@@ -282,11 +431,89 @@ const BLINK_HIGH_PHASE = 2;
           }
         }
       }
-      else if (tool === "trap") { if (grid[y][x] === T.ROOM) { grid[y][x] = T.TRAP; placed = true; } }
+      else if (tool === "trap") {
+        if (grid[y][x] === T.ROOM) {
+          const traps = listTraps();
+          const chosenTrap = (selectedTrapId && traps.find(t => t.id === selectedTrapId)) || traps[0];
+          if (chosenTrap) {
+            grid[y][x] = T.TRAP;
+            trapType[y][x] = chosenTrap.id;
+            trapRearm[y][x] = 0;
+            placed = true;
+            log(`Placed trap: ${chosenTrap.name}`);
+          }
+        }
+      }
       else if (tool === "loot") { if (grid[y][x] === T.ROOM) { grid[y][x] = T.LOOT; placed = true; } }
       if (placed) { mana -= cost; updateUI(); }
     }
   });
+
+  function tileTypeName(t) {
+    return {
+      [T.WALL]: "Wall",
+      [T.ROOM]: "Room",
+      [T.MOB]: "Mob",
+      [T.TRAP]: "Trap",
+      [T.LOOT]: "Loot",
+      [T.ENTRANCE]: "Entrance",
+      [T.EXIT]: "Teleporter",
+    }[t] || "Unknown";
+  }
+
+  function updateTileInspector() {
+    const box = el.tileInspector;
+    if (!box) return;
+    box.innerHTML = "";
+    if (selX < 0 || selY < 0) {
+      box.textContent = "Click a tile with Inspect tool.";
+      return;
+    }
+    const t = getTileAt(selX, selY);
+    const head = document.createElement("div");
+    head.innerHTML = `<strong>Tile (${selX},${selY})</strong> — ${tileTypeName(t)}`;
+    box.appendChild(head);
+
+    if (t === T.MOB) {
+      const id = mobType[selY][selX];
+      const def = getMob(id);
+      const hp = mobHp[selY][selX];
+      const mobDiv = document.createElement("div");
+      mobDiv.textContent = def ? `Mob: ${def.name} [HP ${hp}/${def.maxHp}]` : `Mob: Unknown [HP ${hp}]`;
+      box.appendChild(mobDiv);
+    }
+    if (t === T.TRAP) {
+      const id = trapType[selY][selX];
+      const def = getTrap(id);
+      const r = trapRearm[selY][selX] || 0;
+      const trapDiv = document.createElement("div");
+      if (def) {
+        trapDiv.textContent = `Trap: ${def.name} [trigger ${(def.triggerChance*100)|0}% | hit ${(def.hitChance*100)|0}% | dmg ${def.minDmg}-${def.maxDmg} | rearm ${def.rearm} | ready in ${r}]`;
+      } else {
+        trapDiv.textContent = `Trap: Unknown (ready in ${r})`;
+      }
+      box.appendChild(trapDiv);
+    }
+    if (t === T.LOOT) {
+      const lootDiv = document.createElement("div");
+      lootDiv.textContent = "Loot node";
+      box.appendChild(lootDiv);
+    }
+    const here = adventurers.filter(p => p.members.some(m => m.hp > 0 && m.x === selX && m.y === selY));
+    if (here.length) {
+      const pHead = document.createElement("div");
+      pHead.style.marginTop = "6px";
+      pHead.innerHTML = `<strong>Parties here:</strong>`;
+      box.appendChild(pHead);
+      here.forEach(p => {
+        const totalHp = p.members.reduce((s, m) => s + Math.max(0, m.hp), 0);
+        const totalMax = p.members.reduce((s, m) => s + m.maxhp, 0);
+        const row = document.createElement("div");
+        row.textContent = `${p.kind} ${p.id} [HP ${totalHp}/${totalMax}] members:${p.members.length}`;
+        box.appendChild(row);
+      });
+    }
+  }
 
   // ----- Adventurers -----
   const PARTY_KIND = { REGULAR: "Regulars", TRAVELER: "Traveler" };
@@ -324,7 +551,8 @@ const BLINK_HIGH_PHASE = 2;
     const scale = 1 + (level - 1) * 0.25;
     const maxhp = Math.round(base.baseHp * scale);
     const mp = Math.round(base.baseMp * scale);
-    return { hp: maxhp, maxhp, mp, cls, trait, level, x: 1, y: spawnY, loot: 0, bleeding: 0 };
+    const invMax = 3 + Math.floor((level - 1) / 2) + (base.carryBonus || 0);
+    return { hp: maxhp, maxhp, mp, cls, trait, level, x: 1, y: spawnY, coins: 0, inv: 0, invMax, potion: null, loot: 0, bleeding: 0 };
   }
 
   // Reveal tiles around party members based on class bonuses (e.g., ranger)
@@ -581,8 +809,30 @@ const BLINK_HIGH_PHASE = 2;
   function interact(party, m) {
     const t = tileAt(m.x, m.y);
     if (t === T.LOOT && Math.random() < 0.35) {
-      m.loot += rnd(1, 3);
-      mana += 1;
+      // roll what the node provides: coins or item or potion
+      const roll = Math.random();
+      if (roll < 0.5) {
+        const coins = rnd(1, 5);
+        m.coins += coins; // unlimited stash
+        mana += Math.floor(coins / 2);
+        log(`[Loot] ${party.id} ${m.cls} finds ${coins} coins.`);
+      } else if (roll < 0.85) {
+        if (m.inv < m.invMax) {
+          m.inv += 1;
+          mana += 1;
+          log(`[Loot] ${party.id} ${m.cls} picks up an item (${m.inv}/${m.invMax}).`);
+        } else {
+          log(`[Loot] ${party.id} ${m.cls} cannot carry more items (${m.inv}/${m.invMax}).`);
+        }
+      } else {
+        if (!m.potion) {
+          m.potion = makePotion();
+          mana += 1;
+          log(`[Loot] ${party.id} ${m.cls} stores a ${m.potion.tier} Potion.`);
+        } else {
+          log(`[Loot] ${party.id} ${m.cls} leaves a potion (already holding one).`);
+        }
+      }
       lootLastWindow += 1;
       particles.push({ x: m.x, y: m.y, life: 12, color: "#ffd447" });
       if (Math.random() < 0.15) { grid[m.y][m.x] = T.ROOM; }
@@ -590,12 +840,22 @@ const BLINK_HIGH_PHASE = 2;
     if (t === T.MOB) {
       resolveCombatAt(party, m.x, m.y);
     }
-    if (t === T.TRAP && Math.random() < 0.35) {
-      const dmg = rnd(6, 12);
-      m.hp -= dmg;
-      mana += Math.floor(dmg / 3);
-      particles.push({ x: m.x, y: m.y, life: 10, color: "#ff5a47" });
-      if (Math.random() < 0.1) grid[m.y][m.x] = T.ROOM;
+    if (t === T.TRAP) {
+      const tid = trapType[m.y][m.x];
+      const def = getTrap(tid) || { triggerChance: 0.35, hitChance: 0.85, minDmg: 6, maxDmg: 12, rearm: 6, color: "#ff5a47" };
+      if (trapRearm[m.y][m.x] <= 0 && Math.random() < def.triggerChance) {
+        const hit = Math.random() < def.hitChance;
+        if (hit) {
+          const dmg = rnd(def.minDmg, def.maxDmg);
+          m.hp -= dmg;
+          mana += Math.floor(dmg / 3);
+          particles.push({ x: m.x, y: m.y, life: 10, color: def.color || "#ff5a47" });
+          log(`[Trap] ${def.name || "Trap"} at (${m.x},${m.y}) hits ${party.id} ${m.cls} for ${dmg} dmg.`);
+        } else {
+          log(`[Trap] ${def.name || "Trap"} at (${m.x},${m.y}) triggers but misses ${party.id} ${m.cls}.`);
+        }
+        trapRearm[m.y][m.x] = def.rearm || 6;
+      }
     }
     if (m.bleeding > 0) { m.bleeding--; m.hp -= 1; mana += 1; }
   }
@@ -640,6 +900,8 @@ const BLINK_HIGH_PHASE = 2;
       // party turn
       for (const m of party.members) {
         if (m.hp <= 0) continue;
+        // try potion first if hurt
+        if (maybeUsePotion(party, m)) continue;
         const skill = pickSkill(m);
         if (skill.type === "heal") {
           if (m.mp >= skill.cost) {
@@ -711,12 +973,17 @@ const BLINK_HIGH_PHASE = 2;
     if (killBoostActive > 0) gain += 10;
     mana += gain;
     particles.push({ x: m.x, y: m.y, life: 14, color: "#ff8aa8" });
+    log(`[Death] ${party.id} ${m.cls} (L${m.level}) dies at (${m.x},${m.y}).`);
     return true;
   }
 
   function maybeExit(party, m) {
     if (tileAt(m.x, m.y) === T.EXIT) {
-      mana += Math.floor(m.loot / 2);
+      // Convert carried items to coins, then coins to mana trickle
+      const itemCoins = m.inv * 2; // each item converts to 2 coins on exit
+      const coins = m.coins + itemCoins;
+      mana += Math.floor(coins / 2) + Math.floor(m.loot / 2);
+      m.coins = 0; m.inv = 0; m.potion = null;
       party.returned = true;
       return true;
     }
@@ -725,8 +992,14 @@ const BLINK_HIGH_PHASE = 2;
   // Party-level exit: if leader reaches exit, cash out all loot and remove the party
   function maybePartyExit(party, leader) {
     if (tileAt(leader.x, leader.y) === T.EXIT) {
-      const totalLoot = party.members.reduce((s, mm) => s + (mm.loot || 0), 0);
-      mana += Math.floor(totalLoot / 2);
+      // Cash out all members: items -> coins, then coins+loot -> mana
+      let totalCoins = 0, totalLoot = 0;
+      party.members.forEach(mm => {
+        totalCoins += (mm.coins || 0) + (mm.inv || 0) * 2;
+        totalLoot += (mm.loot || 0);
+        mm.coins = 0; mm.inv = 0; mm.potion = null;
+      });
+      mana += Math.floor(totalCoins / 2) + Math.floor(totalLoot / 2);
       party.returned = true;
       party.alive = false;
       return true;
@@ -783,12 +1056,14 @@ const BLINK_HIGH_PHASE = 2;
       // Single step per party
       reveal(p);
       const step = nextStepForMember(p, leader);
-      if (step) {
+  if (step) {
         // remember last position for flee
         p.lastPos = { x: leader.x, y: leader.y };
         p.members.forEach(m => { if (m.hp > 0) { m.x = step.x; m.y = step.y; } });
       }
       reveal(p);
+  // Quick check to drink potions outside combat
+  p.members.forEach(m => { if (m.hp > 0) maybeUsePotion(p, m); });
       // One interaction per party at leader tile
       interact(p, leader);
       // Bleed ticks for other alive members
@@ -868,6 +1143,14 @@ const BLINK_HIGH_PHASE = 2;
             }
           }
         }
+        // trap rearm countdown
+        if (grid[y][x] === T.TRAP && trapRearm[y][x] > 0) {
+          trapRearm[y][x]--;
+          if (trapRearm[y][x] === 0) {
+            const def = getTrap(trapType[y][x]);
+            log(`[Trap] ${def?.name || "Trap"} at (${x},${y}) is re-armed.`);
+          }
+        }
       }
     }
 
@@ -940,7 +1223,8 @@ const BLINK_HIGH_PHASE = 2;
     members.forEach((m, i) => {
       const row = document.createElement("div");
       const hpPct = Math.max(0, Math.round((m.hp / m.maxhp) * 100));
-      row.textContent = `#${i + 1} L${m.level} ${m.cls} [HP ${m.hp}/${m.maxhp} ${hpPct}% | MP ${m.mp}] trait: ${m.trait} @(${m.x},${m.y}) loot:${m.loot}`;
+  const potStr = m.potion ? ` potion:${m.potion.tier}` : "";
+  row.textContent = `#${i + 1} L${m.level} ${m.cls} [HP ${m.hp}/${m.maxhp} ${hpPct}% | MP ${m.mp}] trait: ${m.trait} @(${m.x},${m.y}) loot:${m.loot} items:${m.inv}/${m.invMax} coins:${m.coins}${potStr}`;
       list.appendChild(row);
     });
     container.appendChild(list);
@@ -990,6 +1274,72 @@ const BLINK_HIGH_PHASE = 2;
     el.economic.textContent = economicPressure;
   }
 
+  function tileTypeName(t) {
+    return {
+      [T.WALL]: "Wall",
+      [T.ROOM]: "Room",
+      [T.MOB]: "Mob",
+      [T.TRAP]: "Trap",
+      [T.LOOT]: "Loot",
+      [T.ENTRANCE]: "Entrance",
+      [T.EXIT]: "Teleporter",
+    }[t] || "Unknown";
+  }
+
+  function updateTileInspector() {
+    const box = el.tileInspector;
+    if (!box) return;
+    box.innerHTML = "";
+    if (selX < 0 || selY < 0) {
+      box.textContent = "Click a tile with Inspect tool.";
+      return;
+    }
+    const t = getTileAt(selX, selY);
+    const head = document.createElement("div");
+    head.innerHTML = `<strong>Tile (${selX},${selY})</strong> — ${tileTypeName(t)}`;
+    box.appendChild(head);
+
+    if (t === T.MOB) {
+      const id = mobType[selY][selX];
+      const def = getMob(id);
+      const hp = mobHp[selY][selX];
+      const mobDiv = document.createElement("div");
+      mobDiv.textContent = def ? `Mob: ${def.name} [HP ${hp}/${def.maxHp}]` : `Mob: Unknown [HP ${hp}]`;
+      box.appendChild(mobDiv);
+    }
+    if (t === T.TRAP) {
+      const id = trapType[selY][selX];
+      const def = getTrap(id);
+      const r = trapRearm[selY][selX] || 0;
+      const trapDiv = document.createElement("div");
+      if (def) {
+        trapDiv.textContent = `Trap: ${def.name} [trigger ${(def.triggerChance*100)|0}% | hit ${(def.hitChance*100)|0}% | dmg ${def.minDmg}-${def.maxDmg} | rearm ${def.rearm} | ready in ${r}]`;
+      } else {
+        trapDiv.textContent = `Trap: Unknown (ready in ${r})`;
+      }
+      box.appendChild(trapDiv);
+    }
+    if (t === T.LOOT) {
+      const lootDiv = document.createElement("div");
+      lootDiv.textContent = "Loot node";
+      box.appendChild(lootDiv);
+    }
+    const here = adventurers.filter(p => p.members.some(m => m.hp > 0 && m.x === selX && m.y === selY));
+    if (here.length) {
+      const pHead = document.createElement("div");
+      pHead.style.marginTop = "6px";
+      pHead.innerHTML = `<strong>Parties here:</strong>`;
+      box.appendChild(pHead);
+      here.forEach(p => {
+        const totalHp = p.members.reduce((s, m) => s + Math.max(0, m.hp), 0);
+        const totalMax = p.members.reduce((s, m) => s + m.maxhp, 0);
+        const row = document.createElement("div");
+        row.textContent = `${p.kind} ${p.id} [HP ${totalHp}/${totalMax}] members:${p.members.length}`;
+        box.appendChild(row);
+      });
+    }
+  }
+
   // ----- Rendering -----
   function render() {
     const ctx = el.grid.getContext("2d");
@@ -1012,7 +1362,10 @@ const BLINK_HIGH_PHASE = 2;
           const def = getMob(mobType[y][x] || "slime");
           drawDot(x, y, def?.color || "#47ff88");
         }
-        if (t === T.TRAP) { drawDot(x, y, "#ff5a47"); }
+        if (t === T.TRAP) {
+          const def = getTrap(trapType[y][x]);
+          drawDot(x, y, def?.color || "#ff5a47");
+        }
         if (t === T.LOOT) { drawDot(x, y, "#ffd447"); }
         if (t === T.ENTRANCE) { drawDot(x, y, "#7cc1ff"); }
         if (t === T.EXIT) { drawDot(x, y, "#b084ff"); }
@@ -1021,7 +1374,7 @@ const BLINK_HIGH_PHASE = 2;
 
     // build hover preview (drawn over tiles, under parties)
     if (hoverX >= 0 && hoverY >= 0) {
-      let valid = canPlace(tool, hoverX, hoverY);
+      let valid = (tool === "inspect") ? true : canPlace(tool, hoverX, hoverY);
       // refine validity for erase on rooms: must preserve entrance-exit path
       if (tool === "erase") {
         const t = getTileAt(hoverX, hoverY);
@@ -1034,10 +1387,11 @@ const BLINK_HIGH_PHASE = 2;
       else if (tool === "mob") color = "#102c20";
       else if (tool === "trap") color = "#2a1616";
       else if (tool === "loot") color = "#2a2410";
-      else if (tool === "erase") color = "#333"
+  else if (tool === "erase") color = "#333";
+  else if (tool === "inspect") color = "#364152";
       if (!valid) color = "#6b2222";
       ctx.save();
-      ctx.globalAlpha = 0.45;
+  ctx.globalAlpha = tool === "inspect" ? 0.25 : 0.45;
       ctx.fillStyle = color;
       ctx.fillRect(hoverX * TILE, hoverY * TILE, TILE - 1, TILE - 1);
       if (!valid) {
@@ -1046,6 +1400,14 @@ const BLINK_HIGH_PHASE = 2;
         ctx.lineWidth = 2;
         ctx.strokeRect(hoverX * TILE + 1, hoverY * TILE + 1, TILE - 3, TILE - 3);
       }
+      ctx.restore();
+    }
+    // selection highlight for inspector
+    if (selX >= 0 && selY >= 0) {
+      ctx.save();
+      ctx.strokeStyle = "#3a86ff";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(selX * TILE + 1, selY * TILE + 1, TILE - 3, TILE - 3);
       ctx.restore();
     }
     // adventurers rendered as a single marker per party
@@ -1180,6 +1542,26 @@ const BLINK_HIGH_PHASE = 2;
   updateUI();
   // initialize selected build tool button UI
   updateToolSelection();
+  refreshPaletteForTool();
+  // If starting on Inspect, precompute mob label with default
+  if (selectedMobId) {
+    const mob = listMobs().find(m => m.id === selectedMobId);
+    const c = mob?.cost ?? COSTS.mob;
+    updateMobToolLabel(c);
+  } else {
+    const first = listMobs()[0];
+    if (first) updateMobToolLabel(first.cost ?? COSTS.mob);
+  }
+  // Precompute trap tool label as well
+  if (selectedTrapId) {
+    const trap = listTraps().find(t => t.id === selectedTrapId);
+    const c = trap?.cost ?? COSTS.trap;
+    updateTrapToolLabel(c);
+  } else {
+    const firstTrap = listTraps()[0];
+    if (firstTrap) updateTrapToolLabel(firstTrap.cost ?? COSTS.trap);
+  }
   loop();
   render();
+  updateTileInspector();
 })();
