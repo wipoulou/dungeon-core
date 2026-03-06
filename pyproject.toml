@@ -1,0 +1,24 @@
+[project]
+name = "dungeon-core"
+version = "0.1.0"
+description = "Dungeon Symbiosis - You are the Dungeon"
+requires-python = ">=3.13"
+dependencies = [
+    "raylib>=5.5.0.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "ruff>=0.15.5",
+    "watchfiles>=1.1.1",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
