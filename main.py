@@ -33,7 +33,8 @@ FOG_COLOR = rl.Color(0, 0, 0, 160)
 # Tools
 TOOL_DIG = 0
 TOOL_CHEST = 1
-tool_names = ["Dig/Place", "Chest"]
+TOOL_SPIKE = 2
+tool_names = ["Dig/Place", "Chest", "Spike"]
 
 # -- Init --
 rl.init_window(SCREEN_W, SCREEN_H, "Dungeon Symbiosis")
@@ -90,6 +91,8 @@ while not rl.window_should_close():
         current_tool = TOOL_DIG
     if rl.is_key_pressed(rl.KeyboardKey.KEY_TWO):
         current_tool = TOOL_CHEST
+    if rl.is_key_pressed(rl.KeyboardKey.KEY_THREE):
+        current_tool = TOOL_SPIKE
     if rl.is_key_pressed(rl.KeyboardKey.KEY_F):
         show_fog = not show_fog
 
@@ -122,6 +125,11 @@ while not rl.window_should_close():
                 gs.place_chest(hover_gx, hover_gy)
             if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_RIGHT):
                 gs.remove_chest(hover_gx, hover_gy)
+        elif current_tool == TOOL_SPIKE:
+            if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_LEFT):
+                gs.place_spike(hover_gx, hover_gy)
+            if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_RIGHT):
+                gs.remove_spike(hover_gx, hover_gy)
 
     # Respawn
     if rl.is_key_pressed(rl.KeyboardKey.KEY_R):
@@ -165,6 +173,11 @@ while not rl.window_should_close():
         elif current_tool == TOOL_CHEST:
             if hover_tile == Tile.EMPTY:
                 rl.draw_rectangle_rec(r, rl.Color(200, 170, 50, 80))
+        elif current_tool == TOOL_SPIKE:
+            if hover_tile == Tile.EMPTY:
+                rl.draw_rectangle_rec(r, rl.Color(200, 40, 40, 80))
+            elif hover_tile == Tile.SPIKE:
+                rl.draw_rectangle_rec(r, HOVER_DIG_COLOR)
 
     # Fog of war — dim tiles no adventurer has seen
     if show_fog:
@@ -202,6 +215,16 @@ while not rl.window_should_close():
             int(ax), int(ay - 0.8 * TILE_SIZE),
             int(0.6 * TILE_SIZE), int(1.8 * TILE_SIZE), c,
         )
+        # HP bar
+        if a.alive and a.hp < a.max_hp:
+            bar_w = int(0.8 * TILE_SIZE)
+            bar_h = 3
+            bar_x = int(ax - 0.1 * TILE_SIZE)
+            bar_y = int(ay - 1.0 * TILE_SIZE)
+            hp_frac = a.hp / a.max_hp
+            rl.draw_rectangle(bar_x, bar_y, bar_w, bar_h, rl.Color(40, 40, 40, 200))
+            bar_color = rl.GREEN if hp_frac > 0.5 else rl.YELLOW if hp_frac > 0.25 else rl.RED
+            rl.draw_rectangle(bar_x, bar_y, int(bar_w * hp_frac), bar_h, bar_color)
 
     rl.end_mode_2d()
 
@@ -233,7 +256,7 @@ while not rl.window_should_close():
 
     # Controls
     rl.draw_text(
-        "LMB/RMB: Tool | 1-2: Tool | Scroll: Zoom | Space: Pause | F: Fog | R: Spawn",
+        "LMB/RMB: Tool | 1-3: Tool | Scroll: Zoom | Space: Pause | F: Fog | R: Spawn",
         10, SCREEN_H - 25, 16, rl.Color(180, 180, 180, 255),
     )
 

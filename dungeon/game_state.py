@@ -60,6 +60,28 @@ class GameState:
         self._invalidate_paths()
         return True
 
+    def place_spike(self, x: int, y: int) -> bool:
+        """Place a spike trap. Must be on a floor (solid below)."""
+        if not self.grid.in_bounds(x, y):
+            return False
+        if self.grid.get(x, y) != Tile.EMPTY:
+            return False
+        if not self.grid.is_solid(x, y - 1):
+            return False
+        self.grid.set(x, y, Tile.SPIKE)
+        self._invalidate_paths()
+        return True
+
+    def remove_spike(self, x: int, y: int) -> bool:
+        """Remove a spike trap."""
+        if not self.grid.in_bounds(x, y):
+            return False
+        if self.grid.get(x, y) != Tile.SPIKE:
+            return False
+        self.grid.set(x, y, Tile.EMPTY)
+        self._invalidate_paths()
+        return True
+
     def _invalidate_paths(self) -> None:
         for adv in self.adventurers:
             adv._path_dirty = True
