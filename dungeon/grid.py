@@ -10,12 +10,17 @@ class Tile(Enum):
     SPIKE = "spike"
     CHEST = "chest"
     LADDER = "ladder"
+    BEAR_TRAP = "bear_trap"
+    ARROW_TRAP_L = "arrow_trap_l"  # fires left
+    ARROW_TRAP_R = "arrow_trap_r"  # fires right
 
 
 # Tiles that block movement
 SOLID_TILES = {Tile.DIRT}
 # Tiles that hurt
-HAZARD_TILES = {Tile.SPIKE}
+HAZARD_TILES = {Tile.SPIKE, Tile.BEAR_TRAP}
+# Arrow traps (need periodic update)
+ARROW_TRAP_TILES = {Tile.ARROW_TRAP_L, Tile.ARROW_TRAP_R}
 
 
 class Grid:

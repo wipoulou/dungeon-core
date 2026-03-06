@@ -9,7 +9,11 @@ from dungeon.adventurer import Adventurer, AdventurerClass, make_adventurer, upd
 from dungeon.grid import Grid, Tile, make_room_slice
 from dungeon.loot import Vault
 from dungeon.adventurer import VISION_RANGE
-from dungeon.mob import AGGRO_RANGE, Mob, make_mob, update_mob
+from dungeon.mob import AGGRO_RANGE, Mob, MobType, make_mob, update_mob
+from dungeon.trap import (
+    BEAR_TRAP_DAMAGE, BEAR_TRAP_HOLD_TIME, BEAR_TRAP_REARM_TIME,
+    ARROW_DAMAGE, TrapState, update_traps,
+)
 
 # Wave spawning
 WAVE_COOLDOWN = 10.0  # seconds between waves
@@ -39,6 +43,7 @@ class GameState:
     adventurers: list[Adventurer] = field(default_factory=list)
     parties: list[Party] = field(default_factory=list)
     mobs: list[Mob] = field(default_factory=list)
+    trap_state: TrapState = field(default_factory=TrapState)
     mana: int = 50  # starting mana to place some chests
     time_elapsed: float = 0.0
     auto_spawn: bool = False
@@ -149,16 +154,68 @@ class GameState:
         self._invalidate_paths()
         return True
 
-    def place_mob(self, x: int, y: int) -> bool:
-        """Place a slime on an empty floor tile."""
+    def place_bear_trap(self, x: int, y: int) -> bool:
+        """Place a bear trap. Must be on a floor."""
+        if not self.grid.in_bounds(x, y):
+            return False
+        if self.grid.get(x, y) != Tile.EMPTY:
+            return False
+        if not self.grid.is_solid(x, y - 1):
+            return False
+        self.grid.set(x, y, Tile.BEAR_TRAP)
+        self.trap_state.bear_traps[(x, y)] = 0.0
+        self._invalidate_paths()
+        return True
+
+    def remove_bear_trap(self, x: int, y: int) -> bool:
+        if not self.grid.in_bounds(x, y):
+            return False
+        if self.grid.get(x, y) != Tile.BEAR_TRAP:
+            return False
+        self.grid.set(x, y, Tile.EMPTY)
+        self.trap_state.unregister(x, y)
+        self._invalidate_paths()
+        return True
+
+    def place_arrow_trap(self, x: int, y: int) -> bool:
+        """Place an arrow trap. Must be on a wall face (solid behind, open in front)."""
+        if not self.grid.in_bounds(x, y):
+            return False
+        if self.grid.get(x, y) != Tile.EMPTY:
+            return False
+        # Determine direction: needs a wall on one side
+        wall_left = self.grid.is_solid(x - 1, y)
+        wall_right = self.grid.is_solid(x + 1, y)
+        if wall_left and not wall_right:
+            self.grid.set(x, y, Tile.ARROW_TRAP_R)  # wall on left, fires right
+        elif wall_right and not wall_left:
+            self.grid.set(x, y, Tile.ARROW_TRAP_L)  # wall on right, fires left
+        else:
+            return False  # needs exactly one wall
+        from dungeon.trap import ARROW_TRAP_INTERVAL
+        self.trap_state.arrow_traps[(x, y)] = ARROW_TRAP_INTERVAL
+        return True
+
+    def remove_arrow_trap(self, x: int, y: int) -> bool:
+        if not self.grid.in_bounds(x, y):
+            return False
+        tile = self.grid.get(x, y)
+        if tile not in (Tile.ARROW_TRAP_L, Tile.ARROW_TRAP_R):
+            return False
+        self.grid.set(x, y, Tile.EMPTY)
+        self.trap_state.unregister(x, y)
+        return True
+
+    def place_mob(self, x: int, y: int, mob_type: MobType = MobType.SLIME) -> bool:
+        """Place a mob on an empty floor tile (or mid-air for bats)."""
         if not self.grid.in_bounds(x, y):
             return False
         tile = self.grid.get(x, y)
         if tile not in (Tile.EMPTY, Tile.SPIKE):
             return False
-        if not self.grid.is_solid(x, y - 1):
+        if mob_type != MobType.BAT and not self.grid.is_solid(x, y - 1):
             return False
-        mob = make_mob(float(x), float(y))
+        mob = make_mob(float(x), float(y), mob_type)
         self.mobs.append(mob)
         return True
 
@@ -245,6 +302,32 @@ class GameState:
             for a in active_members:
                 if a.in_combat or a._returning:
                     a._party_speed = None
+
+        # Update traps (timers, fire arrows, move projectiles)
+        update_traps(self.trap_state, self.grid, dt)
+
+        # Bear trap triggering — check adventurers standing on armed bear traps
+        for adv in self.adventurers:
+            if not adv.alive or adv.reached_exit or not adv.grounded:
+                continue
+            pos = (adv.grid_x, adv.grid_y)
+            if pos in self.trap_state.bear_traps and self.trap_state.bear_traps[pos] == 0.0:
+                # Armed bear trap — spring it!
+                self.mana += adv.take_damage(BEAR_TRAP_DAMAGE)
+                adv._trapped_timer = BEAR_TRAP_HOLD_TIME
+                self.trap_state.bear_traps[pos] = BEAR_TRAP_REARM_TIME
+
+        # Projectile-adventurer collision
+        for proj in self.trap_state.projectiles:
+            if not proj.alive:
+                continue
+            for adv in self.adventurers:
+                if not adv.alive or adv.reached_exit:
+                    continue
+                if adv.grid_x == int(proj.x) and adv.grid_y == int(proj.y):
+                    self.mana += adv.take_damage(proj.damage)
+                    proj.alive = False
+                    break
 
         # Update mobs
         for mob in self.mobs:
@@ -350,7 +433,14 @@ def new_game() -> GameState:
             if gs.grid.get(x, y) == Tile.CHEST:
                 gs.vault.chests[(x, y)] = Chest(x, y, has_loot=True)
                 gs.vault.items -= 1
-    # Place slimes
-    gs.place_mob(26, 15)  # guarding level 2 corridor
-    gs.place_mob(32, 5)   # guarding deep vault
+    # Place mobs
+    gs.place_mob(26, 15)  # slime guarding level 2 corridor
+    gs.place_mob(32, 5)   # slime guarding deep vault
+    gs.place_mob(15, 21, MobType.BAT)   # bat patrolling level 1 hall
+    gs.place_mob(10, 10, MobType.SKELETON)  # skeleton in treasure room
+    # Place traps
+    gs.place_bear_trap(18, 15)  # bear trap in level 2 corridor
+    gs.place_arrow_trap(1, 10)  # arrow trap in treasure room (fires right from left wall)
+    # Register any grid-placed traps (spikes are handled separately)
+    gs.trap_state.register_traps(gs.grid)
     return gs

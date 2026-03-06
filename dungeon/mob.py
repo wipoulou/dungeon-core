@@ -15,6 +15,8 @@ RESPAWN_TIME = 30.0  # seconds before a dead mob respawns
 
 class MobType(Enum):
     SLIME = "slime"
+    BAT = "bat"
+    SKELETON = "skeleton"
 
 
 # Base stats per mob type
@@ -22,6 +24,14 @@ MOB_STATS: dict[MobType, dict[str, int | float]] = {
     MobType.SLIME: {
         "hp": 60, "max_hp": 60, "attack": 15, "defense": 0,
         "speed": 2.0, "attack_speed": 1.0, "attack_range": 1.2,
+    },
+    MobType.BAT: {
+        "hp": 30, "max_hp": 30, "attack": 8, "defense": 0,
+        "speed": 3.5, "attack_speed": 1.5, "attack_range": 1.2,
+    },
+    MobType.SKELETON: {
+        "hp": 80, "max_hp": 80, "attack": 12, "defense": 2,
+        "speed": 1.5, "attack_speed": 0.6, "attack_range": 4.0,
     },
 }
 
@@ -32,11 +42,14 @@ class Mob(Entity):
     direction: float = 1.0  # 1.0 = right, -1.0 = left
     _hazard_cooldown: float = 0.0
     _home_x: float = 0.0  # patrol origin, returns here after combat
+    _home_y: float = 0.0
     _respawn_timer: float = 0.0  # counts down to respawn when dead
+    _vy_dir: float = 1.0  # vertical bounce direction for bats
 
     def __post_init__(self) -> None:
         self.faction = Faction.DUNGEON
         self._home_x = self.x
+        self._home_y = self.y
 
     def take_damage(self, amount: int) -> int:
         was_alive = self.alive
@@ -71,6 +84,7 @@ def update_mob(mob: Mob, grid: Grid, dt: float) -> int:
                 mob.hp = stats.get("max_hp", mob.max_hp)
                 mob.alive = True
                 mob.x = mob._home_x
+                mob.y = mob._home_y
                 mob._respawn_timer = 0.0
         return 0
 
@@ -93,6 +107,15 @@ def update_mob(mob: Mob, grid: Grid, dt: float) -> int:
                 mob.direction = -1.0
             return mana  # no movement while fighting
 
+    if mob.mob_type == MobType.BAT:
+        _update_bat(mob, grid, dt)
+    else:
+        _update_ground_mob(mob, grid, dt)
+    return mana
+
+
+def _update_ground_mob(mob: Mob, grid: Grid, dt: float) -> None:
+    """Gravity + horizontal patrol for ground mobs (slime, skeleton)."""
     # Gravity
     mob.vy += GRAVITY * dt
     new_y = mob.y + mob.vy * dt
@@ -125,4 +148,24 @@ def update_mob(mob: Mob, grid: Grid, dt: float) -> int:
         if mob._hazard_cooldown <= 0:
             mob.take_damage(SPIKE_DAMAGE_TO_MOB)
             mob._hazard_cooldown = 1.0
-    return mana
+
+
+def _update_bat(mob: Mob, grid: Grid, dt: float) -> None:
+    """Flying mob — bounces off walls and ceiling/floor."""
+    mob.grounded = False  # bats never ground
+
+    # Horizontal movement
+    new_x = mob.x + mob.direction * mob.speed * dt
+    ahead_x = int(new_x + 0.3 * mob.direction)
+    if grid.is_solid(ahead_x, mob.grid_y):
+        mob.direction *= -1.0
+    else:
+        mob.x = new_x
+
+    # Vertical bounce
+    new_y = mob.y + mob._vy_dir * mob.speed * 0.5 * dt
+    check_y = int(new_y + 0.5 * mob._vy_dir)
+    if grid.is_solid(mob.grid_x, check_y):
+        mob._vy_dir *= -1.0
+    else:
+        mob.y = new_y

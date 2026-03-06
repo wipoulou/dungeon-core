@@ -6,6 +6,7 @@ from dungeon.adventurer import AdventurerClass
 from dungeon.game_state import new_game
 from dungeon.grid import Tile
 from dungeon.log import clear as log_clear, dump as log_dump
+from dungeon.mob import MobType
 
 # -- Constants --
 SCREEN_W, SCREEN_H = 960, 600
@@ -18,6 +19,9 @@ TILE_COLORS = {
     Tile.SPIKE: rl.Color(200, 40, 40, 255),
     Tile.CHEST: rl.Color(200, 170, 50, 255),
     Tile.LADDER: rl.Color(160, 120, 60, 255),
+    Tile.BEAR_TRAP: rl.Color(180, 140, 60, 255),
+    Tile.ARROW_TRAP_L: rl.Color(140, 140, 160, 255),
+    Tile.ARROW_TRAP_R: rl.Color(140, 140, 160, 255),
 }
 BG_COLOR = rl.Color(20, 20, 30, 255)
 GRID_LINE_COLOR = rl.Color(255, 255, 255, 15)
@@ -35,6 +39,7 @@ FOG_COLOR = rl.Color(0, 0, 0, 160)
 MOB_COLOR = rl.Color(60, 180, 60, 255)
 MOB_DAMAGE_COLOR = rl.Color(255, 255, 255, 255)
 MOB_DEAD_COLOR = rl.Color(40, 80, 40, 120)
+PROJECTILE_COLOR = rl.Color(255, 200, 50, 255)
 
 # -- Sprite tile IDs (Kenney Tiny Dungeon) --
 SPRITE_DIR = "kenney_tiny-dungeon/Tiles"
@@ -51,6 +56,10 @@ SPRITE_MAP = {
     "mage": "tile_0084",
     "healer": "tile_0099",
     "slime": "tile_0108",
+    "skeleton": "tile_0100",
+    "bat": "tile_0121",
+    "arrow_trap": "tile_0071",
+    "bear_trap": "tile_0069",
 }
 
 ADV_CLASS_SPRITES = {
@@ -60,13 +69,23 @@ ADV_CLASS_SPRITES = {
     AdventurerClass.HEALER: "healer",
 }
 
+MOB_SPRITES = {
+    MobType.SLIME: "slime",
+    MobType.BAT: "bat",
+    MobType.SKELETON: "skeleton",
+}
+
 # Tools
 TOOL_DIG = 0
 TOOL_CHEST = 1
 TOOL_SPIKE = 2
 TOOL_LADDER = 3
 TOOL_SLIME = 4
-tool_names = ["Dig/Place", "Chest", "Spike", "Ladder", "Slime"]
+TOOL_BEAR_TRAP = 5
+TOOL_ARROW_TRAP = 6
+TOOL_BAT = 7
+TOOL_SKELETON = 8
+tool_names = ["Dig/Place", "Chest", "Spike", "Ladder", "Slime", "BearTrap", "ArrowTrap", "Bat", "Skeleton"]
 
 # -- Init --
 rl.init_window(SCREEN_W, SCREEN_H, "Dungeon Symbiosis")
@@ -150,6 +169,14 @@ while not rl.window_should_close():
         current_tool = TOOL_LADDER
     if rl.is_key_pressed(rl.KeyboardKey.KEY_FIVE):
         current_tool = TOOL_SLIME
+    if rl.is_key_pressed(rl.KeyboardKey.KEY_SIX):
+        current_tool = TOOL_BEAR_TRAP
+    if rl.is_key_pressed(rl.KeyboardKey.KEY_SEVEN):
+        current_tool = TOOL_ARROW_TRAP
+    if rl.is_key_pressed(rl.KeyboardKey.KEY_EIGHT):
+        current_tool = TOOL_BAT
+    if rl.is_key_pressed(rl.KeyboardKey.KEY_NINE):
+        current_tool = TOOL_SKELETON
     if rl.is_key_pressed(rl.KeyboardKey.KEY_F):
         show_fog = not show_fog
 
@@ -194,7 +221,27 @@ while not rl.window_should_close():
                 gs.remove_ladder(hover_gx, hover_gy)
         elif current_tool == TOOL_SLIME:
             if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_LEFT):
-                gs.place_mob(hover_gx, hover_gy)
+                gs.place_mob(hover_gx, hover_gy, MobType.SLIME)
+            if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_RIGHT):
+                gs.remove_mob(hover_gx, hover_gy)
+        elif current_tool == TOOL_BEAR_TRAP:
+            if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_LEFT):
+                gs.place_bear_trap(hover_gx, hover_gy)
+            if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_RIGHT):
+                gs.remove_bear_trap(hover_gx, hover_gy)
+        elif current_tool == TOOL_ARROW_TRAP:
+            if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_LEFT):
+                gs.place_arrow_trap(hover_gx, hover_gy)
+            if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_RIGHT):
+                gs.remove_arrow_trap(hover_gx, hover_gy)
+        elif current_tool == TOOL_BAT:
+            if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_LEFT):
+                gs.place_mob(hover_gx, hover_gy, MobType.BAT)
+            if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_RIGHT):
+                gs.remove_mob(hover_gx, hover_gy)
+        elif current_tool == TOOL_SKELETON:
+            if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_LEFT):
+                gs.place_mob(hover_gx, hover_gy, MobType.SKELETON)
             if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_RIGHT):
                 gs.remove_mob(hover_gx, hover_gy)
 
@@ -242,6 +289,18 @@ while not rl.window_should_close():
                 spike_h = int(0.1 * TILE_SIZE)
                 c = TILE_COLORS[Tile.SPIKE]
                 rl.draw_rectangle(int(wx), int(wy - spike_h + TILE_SIZE), TILE_SIZE, spike_h, c)
+            elif tile == Tile.BEAR_TRAP:
+                # Bear trap — jaw shape on the floor
+                bt_timer = gs.trap_state.bear_traps.get((x, y), 0.0)
+                if bt_timer == 0.0:
+                    # Armed — bright
+                    draw_sprite("bear_trap", wx, wy)
+                else:
+                    # Sprung — dim
+                    draw_sprite("bear_trap", wx, wy, tint=rl.Color(100, 100, 100, 180))
+            elif tile in (Tile.ARROW_TRAP_L, Tile.ARROW_TRAP_R):
+                flip = tile == Tile.ARROW_TRAP_R
+                draw_sprite("arrow_trap", wx, wy, flip=flip)
 
     # Hover highlight
     if hover_in_bounds and my > HUD_HEIGHT:
@@ -265,6 +324,19 @@ while not rl.window_should_close():
             elif hover_tile == Tile.LADDER:
                 rl.draw_rectangle_rec(r, HOVER_DIG_COLOR)
         elif current_tool == TOOL_SLIME:
+            if hover_tile in (Tile.EMPTY, Tile.SPIKE):
+                rl.draw_rectangle_rec(r, rl.Color(60, 180, 60, 80))
+        elif current_tool == TOOL_BEAR_TRAP:
+            if hover_tile == Tile.EMPTY:
+                rl.draw_rectangle_rec(r, rl.Color(180, 140, 60, 80))
+            elif hover_tile == Tile.BEAR_TRAP:
+                rl.draw_rectangle_rec(r, HOVER_DIG_COLOR)
+        elif current_tool == TOOL_ARROW_TRAP:
+            if hover_tile == Tile.EMPTY:
+                rl.draw_rectangle_rec(r, rl.Color(140, 140, 160, 80))
+            elif hover_tile in (Tile.ARROW_TRAP_L, Tile.ARROW_TRAP_R):
+                rl.draw_rectangle_rec(r, HOVER_DIG_COLOR)
+        elif current_tool in (TOOL_BAT, TOOL_SKELETON):
             if hover_tile in (Tile.EMPTY, Tile.SPIKE):
                 rl.draw_rectangle_rec(r, rl.Color(60, 180, 60, 80))
 
@@ -320,8 +392,9 @@ while not rl.window_should_close():
             bar_color = rl.GREEN if hp_frac > 0.5 else rl.YELLOW if hp_frac > 0.25 else rl.RED
             rl.draw_rectangle(bar_x, bar_y, int(bar_w * hp_frac), bar_h, bar_color)
 
-    # Mobs (slimes)
+    # Mobs
     for m in gs.mobs:
+        sprite_name = MOB_SPRITES.get(m.mob_type, "slime")
         mx_w, my_w = world_pos(m.x, m.y)
         sw = int(TILE_SIZE * 0.9)
         sh = int(TILE_SIZE * 0.9)
@@ -332,7 +405,7 @@ while not rl.window_should_close():
             tint = rl.Color(255, 200, 200, 255) if m._damage_flash > 0 else rl.WHITE
         else:
             tint = rl.Color(100, 100, 100, 120)
-        draw_sprite("slime", sx, sy, sw, sh, tint=tint, flip=facing_left)
+        draw_sprite(sprite_name, sx, sy, sw, sh, tint=tint, flip=facing_left)
         # HP bar (alive) or respawn loading bar (dead)
         bar_w = int(0.8 * TILE_SIZE)
         bar_h = 3
@@ -347,6 +420,17 @@ while not rl.window_should_close():
             frac = m.respawn_progress
             rl.draw_rectangle(bar_x, bar_y, bar_w, bar_h, rl.Color(40, 40, 40, 200))
             rl.draw_rectangle(bar_x, bar_y, int(bar_w * frac), bar_h, rl.Color(100, 100, 255, 200))
+
+    # Projectiles (arrows)
+    for proj in gs.trap_state.projectiles:
+        if not proj.alive:
+            continue
+        px_w, py_w = world_pos(proj.x, proj.y)
+        arrow_w = int(TILE_SIZE * 0.4)
+        arrow_h = int(TILE_SIZE * 0.15)
+        ax = int(px_w + (TILE_SIZE - arrow_w) / 2)
+        ay = int(py_w + (TILE_SIZE - arrow_h) / 2)
+        rl.draw_rectangle(ax, ay, arrow_w, arrow_h, PROJECTILE_COLOR)
 
     rl.end_mode_2d()
 
@@ -380,7 +464,7 @@ while not rl.window_should_close():
 
     # Controls
     rl.draw_text(
-        "LMB/RMB: Tool | 1-5: Tool | Scroll: Zoom | Space: Pause | F: Fog | R: Spawn | A: Auto",
+        "LMB/RMB: Tool | 1-9/Tab: Tool | Scroll: Zoom | Space: Pause | F: Fog | R: Spawn | A: Auto",
         10, SCREEN_H - 25, 16, rl.Color(180, 180, 180, 255),
     )
 

@@ -89,6 +89,7 @@ class Adventurer(Entity):
     _hazard_hopping: bool = False  # True during a controlled spike hop
     _party_speed: float | None = None  # if set, overrides speed for party cohesion
     _approach_target: Entity | None = field(default=None, repr=False)  # mob to walk toward
+    _trapped_timer: float = 0.0  # >0 means immobilized by bear trap
 
     def __post_init__(self) -> None:
         self.faction = Faction.ADVENTURER
@@ -356,6 +357,14 @@ def update_adventurer(adv: Adventurer, grid: Grid, vault: Vault, dt: float) -> i
             adv._path_dirty = True
         return 0
 
+    # --- Trapped (bear trap) ---
+    if adv._trapped_timer > 0:
+        adv._trapped_timer -= dt
+        if adv._trapped_timer <= 0:
+            adv._trapped_timer = 0.0
+            adv._path_dirty = True
+        return 0  # can't move while trapped
+
     # --- Vision update (every frame to catch new tiles) ---
     old_seen_count = len(adv._seen)
     _update_vision(adv, grid)
@@ -494,7 +503,8 @@ def update_adventurer(adv: Adventurer, grid: Grid, vault: Vault, dt: float) -> i
 
     # --- Hazard check ---
     adv._hazard_cooldown = max(0.0, adv._hazard_cooldown - dt)
-    if grid.is_hazard(*current_tile):
+    tile_here = grid.get(*current_tile)
+    if tile_here == Tile.SPIKE:
         # Spikes only trigger when grounded and not jumping away
         if not adv.grounded or adv.vy > 0:
             pass
@@ -503,13 +513,17 @@ def update_adventurer(adv: Adventurer, grid: Grid, vault: Vault, dt: float) -> i
             if adv._hazard_cooldown <= 0 or new_hazard:
                 damage = SPIKE_DAMAGE
                 if landed_hard:
-                    # Falling onto a spike hurts more
                     damage = int(damage * SPIKE_FALL_MULTIPLIER)
                 mana += adv.take_damage(damage)
                 adv._hazard_cooldown = 1.0
                 adv._last_hazard_tile = current_tile
                 adv._known_hazards.add(current_tile)
-                adv._path_dirty = True  # rethink path now that we know about this trap
+                adv._path_dirty = True
+    elif tile_here == Tile.BEAR_TRAP:
+        # Bear traps: checked via TrapState in game_state (needs trap rearm info)
+        # Just mark as known hazard so pathfinding avoids it next time
+        if adv.grounded and adv.vy <= 0:
+            adv._known_hazards.add(current_tile)
 
     # --- Stuck detection ---
     if current_tile == adv._last_grid_pos:
