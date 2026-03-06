@@ -32,6 +32,7 @@ class Entity:
     defense: int = 0
     speed: float = 4.0
     attack_speed: float = 1.0  # attacks per second (cooldown = 1/attack_speed)
+    attack_range: float = 1.5  # manhattan distance to hit target
     jump_force: float = 10.0
 
     # Resources

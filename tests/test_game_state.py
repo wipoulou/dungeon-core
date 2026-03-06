@@ -66,7 +66,7 @@ def test_spawn_party():
     party = gs.spawn_party()
     assert party._pending_spawns > 0
     # Tick enough to spawn all members
-    for _ in range(int(5 / 0.016)):
+    for _ in range(int(3 / 0.016)):
         gs.update(0.016)
     assert party._pending_spawns == 0
     assert len(party.members) >= 2

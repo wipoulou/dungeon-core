@@ -2,6 +2,7 @@
 
 import pyray as rl
 
+from dungeon.adventurer import AdventurerClass
 from dungeon.game_state import new_game
 from dungeon.grid import Tile
 from dungeon.log import clear as log_clear, dump as log_dump
@@ -35,6 +36,30 @@ MOB_COLOR = rl.Color(60, 180, 60, 255)
 MOB_DAMAGE_COLOR = rl.Color(255, 255, 255, 255)
 MOB_DEAD_COLOR = rl.Color(40, 80, 40, 120)
 
+# -- Sprite tile IDs (Kenney Tiny Dungeon) --
+SPRITE_DIR = "kenney_tiny-dungeon/Tiles"
+SPRITE_MAP = {
+    "dirt0": "tile_0000",
+    "dirt1": "tile_0001",
+    "dirt2": "tile_0012",
+    "entrance": "tile_0063",
+    "chest_full": "tile_0066",
+    "chest_empty": "tile_0064",
+    "ladder": "tile_0075",
+    "warrior": "tile_0087",
+    "rogue": "tile_0088",
+    "mage": "tile_0084",
+    "healer": "tile_0099",
+    "slime": "tile_0108",
+}
+
+ADV_CLASS_SPRITES = {
+    AdventurerClass.WARRIOR: "warrior",
+    AdventurerClass.ROGUE: "rogue",
+    AdventurerClass.MAGE: "mage",
+    AdventurerClass.HEALER: "healer",
+}
+
 # Tools
 TOOL_DIG = 0
 TOOL_CHEST = 1
@@ -52,6 +77,17 @@ gs.auto_spawn = True
 grid = gs.grid
 current_tool = TOOL_DIG
 
+# Load sprite textures
+sprites: dict[str, rl.Texture2D] = {}
+for name, tile_id in SPRITE_MAP.items():
+    path = f"{SPRITE_DIR}/{tile_id}.png"
+    sprites[name] = rl.load_texture(path)
+    rl.set_texture_filter(sprites[name], rl.TextureFilter.TEXTURE_FILTER_POINT)
+
+# Precompute source rect for all sprites (full 16x16 tile)
+SPRITE_SRC = rl.Rectangle(0, 0, 16, 16)
+SPRITE_SRC_FLIP = rl.Rectangle(0, 0, -16, 16)  # horizontally flipped
+
 # Camera centered on grid
 camera = rl.Camera2D()
 camera.offset = rl.Vector2(SCREEN_W / 2, SCREEN_H / 2)
@@ -66,6 +102,16 @@ camera.zoom = min(
 
 paused = False
 show_fog = True
+
+
+def draw_sprite(name: str, wx: float, wy: float, w: float = TILE_SIZE, h: float = TILE_SIZE,
+                 tint: rl.Color = rl.WHITE, flip: bool = False):
+    tex = sprites.get(name)
+    if tex is None:
+        return
+    src = SPRITE_SRC_FLIP if flip else SPRITE_SRC
+    dest = rl.Rectangle(wx, wy, w, h)
+    rl.draw_texture_pro(tex, src, dest, rl.Vector2(0, 0), 0.0, tint)
 
 
 def world_pos(x: float, y: float) -> tuple[float, float]:
@@ -179,21 +225,23 @@ while not rl.window_should_close():
     for y in range(grid.height):
         for x in range(grid.width):
             tile = grid.get(x, y)
-            if tile == Tile.CHEST:
+            wx, wy = world_pos(x, y)
+            if tile == Tile.DIRT:
+                variant = hash((x, y)) % 3
+                draw_sprite(f"dirt{variant}", wx, wy)
+            elif tile == Tile.ENTRANCE:
+                draw_sprite("entrance", wx, wy)
+            elif tile == Tile.CHEST:
                 chest = gs.vault.chests.get((x, y))
-                c = TILE_COLORS[Tile.CHEST] if chest and chest.has_loot else CHEST_EMPTY_COLOR
-            else:
-                c = TILE_COLORS.get(tile)
-            if c is None:
-                continue
-            if tile == Tile.SPIKE:
+                sprite = "chest_full" if chest and chest.has_loot else "chest_empty"
+                draw_sprite(sprite, wx, wy)
+            elif tile == Tile.LADDER:
+                draw_sprite("ladder", wx, wy)
+            elif tile == Tile.SPIKE:
                 # Spikes are short — only 0.1 tile height, sitting on the floor
-                wx, wy = world_pos(x, y)
                 spike_h = int(0.1 * TILE_SIZE)
+                c = TILE_COLORS[Tile.SPIKE]
                 rl.draw_rectangle(int(wx), int(wy - spike_h + TILE_SIZE), TILE_SIZE, spike_h, c)
-            else:
-                r = world_rect(x, y)
-                rl.draw_rectangle_rec(r, c)
 
     # Hover highlight
     if hover_in_bounds and my > HUD_HEIGHT:
@@ -240,28 +288,33 @@ while not rl.window_should_close():
 
     # Adventurers
     for a in gs.adventurers:
+        sprite_name = ADV_CLASS_SPRITES.get(a.adv_class, "warrior")
+        ax, ay = world_pos(a.x, a.y)
+        # Chunky dwarf-style sprites
+        sw = int(TILE_SIZE * 1.2)
+        sh = int(TILE_SIZE * 1.2)
+        sx = ax - (sw - TILE_SIZE) / 2
+        sy = ay - (sh - TILE_SIZE) * 0.7
+        # Determine facing: flip sprite when moving left
+        facing_left = hasattr(a, '_path') and a._path and a._path_index < len(a._path) and a._path[a._path_index][0] < a.x
         if a.alive:
             if a._damage_flash > 0:
-                c = ADV_DAMAGE_COLOR
+                tint = rl.Color(255, 80, 80, 255)
             elif a.looting:
-                c = ADV_LOOTING_COLOR
+                tint = rl.Color(200, 150, 255, 255)
             elif a.reached_exit:
-                c = ADV_EXIT_COLOR
+                tint = rl.Color(80, 255, 80, 255)
             else:
-                c = ADV_COLOR
+                tint = rl.WHITE
         else:
-            c = ADV_DEAD_COLOR
-        ax, ay = world_pos(a.x, a.y)
-        rl.draw_rectangle(
-            int(ax), int(ay - 0.8 * TILE_SIZE),
-            int(0.6 * TILE_SIZE), int(1.8 * TILE_SIZE), c,
-        )
+            tint = rl.Color(100, 100, 100, 150)
+        draw_sprite(sprite_name, sx, sy, sw, sh, tint=tint, flip=facing_left)
         # HP bar
         if a.alive and a.hp < a.max_hp:
             bar_w = int(0.8 * TILE_SIZE)
             bar_h = 3
             bar_x = int(ax - 0.1 * TILE_SIZE)
-            bar_y = int(ay - 1.0 * TILE_SIZE)
+            bar_y = int(sy - 4)
             hp_frac = a.hp / a.max_hp
             rl.draw_rectangle(bar_x, bar_y, bar_w, bar_h, rl.Color(40, 40, 40, 200))
             bar_color = rl.GREEN if hp_frac > 0.5 else rl.YELLOW if hp_frac > 0.25 else rl.RED
@@ -269,25 +322,31 @@ while not rl.window_should_close():
 
     # Mobs (slimes)
     for m in gs.mobs:
-        if m.alive:
-            c = MOB_DAMAGE_COLOR if m._damage_flash > 0 else MOB_COLOR
-        else:
-            c = MOB_DEAD_COLOR
         mx_w, my_w = world_pos(m.x, m.y)
-        rl.draw_rectangle(
-            int(mx_w), int(my_w),
-            int(0.8 * TILE_SIZE), int(0.6 * TILE_SIZE), c,
-        )
-        # HP bar
+        sw = int(TILE_SIZE * 0.9)
+        sh = int(TILE_SIZE * 0.9)
+        sx = mx_w + (TILE_SIZE - sw) / 2
+        sy = my_w + (TILE_SIZE - sh)
+        facing_left = m.direction < 0
+        if m.alive:
+            tint = rl.Color(255, 200, 200, 255) if m._damage_flash > 0 else rl.WHITE
+        else:
+            tint = rl.Color(100, 100, 100, 120)
+        draw_sprite("slime", sx, sy, sw, sh, tint=tint, flip=facing_left)
+        # HP bar (alive) or respawn loading bar (dead)
+        bar_w = int(0.8 * TILE_SIZE)
+        bar_h = 3
+        bar_x = int(mx_w)
+        bar_y = int(sy - 4)
         if m.alive and m.hp < m.max_hp:
-            bar_w = int(0.8 * TILE_SIZE)
-            bar_h = 3
-            bar_x = int(mx_w)
-            bar_y = int(my_w - 4)
             hp_frac = m.hp / m.max_hp
             rl.draw_rectangle(bar_x, bar_y, bar_w, bar_h, rl.Color(40, 40, 40, 200))
             bar_color = rl.GREEN if hp_frac > 0.5 else rl.YELLOW if hp_frac > 0.25 else rl.RED
             rl.draw_rectangle(bar_x, bar_y, int(bar_w * hp_frac), bar_h, bar_color)
+        elif not m.alive and m._respawn_timer > 0:
+            frac = m.respawn_progress
+            rl.draw_rectangle(bar_x, bar_y, bar_w, bar_h, rl.Color(40, 40, 40, 200))
+            rl.draw_rectangle(bar_x, bar_y, int(bar_w * frac), bar_h, rl.Color(100, 100, 255, 200))
 
     rl.end_mode_2d()
 
@@ -328,4 +387,6 @@ while not rl.window_should_close():
     rl.end_drawing()
 
 log_dump()
+for tex in sprites.values():
+    rl.unload_texture(tex)
 rl.close_window()

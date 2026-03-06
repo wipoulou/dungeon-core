@@ -59,51 +59,69 @@ def _fill_rect(g: Grid, x1: int, y1: int, x2: int, y2: int, tile: Tile) -> None:
 
 
 def make_room_slice() -> Grid:
-    """Multi-level dungeon: 30x20 ant-farm layout with traversable staircases.
+    """Multi-level dungeon: 40x25 ant-farm layout.
 
     Layout sketch (y=0 is bottom):
-        y19: [ceiling]
-        y14: ENTRANCE on left
-        y13: ............top platform
-        y9:  ............middle floor (staircase left connects to top)
-        y5:  ............bottom floor (staircase left connects to middle)
-        y0-4: solid earth
-
-    Left side has staircases (1-block steps) so adventurers can go back up.
+        y24: [ceiling]
+        y20: ENTRANCE on left
+        y19: ............Level 1 - entry hall
+        y14: ............Level 2 - spike corridor
+        y9:  ............Level 3 - treasure room
+        y4:  ............Level 4 - deep vault
+        y0-3: solid earth
     """
-    g = Grid(30, 20)
+    g = Grid(40, 25)
 
-    # === Solid earth base (y 0-4) ===
-    _fill_rect(g, 0, 0, 29, 4, Tile.DIRT)
+    # === Solid earth base ===
+    _fill_rect(g, 0, 0, 39, 3, Tile.DIRT)
 
-    # === Walls and ceiling ===
-    _fill_rect(g, 0, 5, 29, 5, Tile.DIRT)   # bottom floor
-    _fill_rect(g, 0, 5, 0, 19, Tile.DIRT)   # left wall
-    _fill_rect(g, 29, 5, 29, 19, Tile.DIRT)  # right wall
-    _fill_rect(g, 0, 19, 29, 19, Tile.DIRT)  # ceiling
+    # === Outer shell ===
+    _fill_rect(g, 0, 4, 39, 4, Tile.DIRT)    # ground floor
+    _fill_rect(g, 0, 4, 0, 24, Tile.DIRT)    # left wall
+    _fill_rect(g, 39, 4, 39, 24, Tile.DIRT)  # right wall
+    _fill_rect(g, 0, 24, 39, 24, Tile.DIRT)  # ceiling
 
-    # === Level 1 (top): entrance platform y=13 ===
-    _fill_rect(g, 1, 13, 22, 13, Tile.DIRT)
-    g.set(1, 14, Tile.ENTRANCE)
-    # Gap at x=21-28 to drop down to level 2
+    # === Level 1 (top): entry hall, floor y=19 ===
+    _fill_rect(g, 1, 19, 30, 19, Tile.DIRT)
+    g.set(1, 20, Tile.ENTRANCE)
+    # Chest at end of hall — easy loot to draw them in
+    g.set(28, 20, Tile.CHEST)
+    # Gap at x=31-38 to drop to level 2
 
-    # === Level 2 (middle): floor at y=9 ===
-    _fill_rect(g, 7, 9, 25, 9, Tile.DIRT)
-    # Spike gauntlet
-    g.set(15, 10, Tile.SPIKE)
-    g.set(18, 10, Tile.SPIKE)
+    # === Level 2: spike corridor, floor y=14 ===
+    _fill_rect(g, 8, 14, 38, 14, Tile.DIRT)
+    # Spikes guarding the path
+    g.set(20, 15, Tile.SPIKE)
+    g.set(23, 15, Tile.SPIKE)
+    g.set(30, 15, Tile.SPIKE)
+    # Chest past the spikes
+    g.set(35, 15, Tile.CHEST)
 
-    # === Ladder: middle to top on the right side ===
-    # Goes from floor level (y=10) up through top platform, one above floor
-    for y in range(10, 15):
-        g.set(22, y, Tile.LADDER)
+    # Ladder: level 2 back up to level 1 (right side)
+    for y in range(15, 21):
+        g.set(31, y, Tile.LADDER)
 
-    # === Ladder: bottom to middle on the left side ===
-    # Goes from floor level (y=6) up through middle platform, one above floor
-    for y in range(6, 11):
-        g.set(7, y, Tile.LADDER)
+    # === Level 3: treasure room, floor y=9 ===
+    _fill_rect(g, 1, 9, 30, 9, Tile.DIRT)
+    # Chests in the treasure room
+    g.set(5, 10, Tile.CHEST)
+    g.set(25, 10, Tile.CHEST)
+    # Spike trap near treasure
+    g.set(12, 10, Tile.SPIKE)
 
-    # === Level 3 (bottom): floor at y=5 (already placed) ===
-    g.set(15, 6, Tile.SPIKE)
+    # Ladder: level 3 back up to level 2 (left side)
+    for y in range(10, 16):
+        g.set(8, y, Tile.LADDER)
+
+    # === Level 4: deep vault, floor y=4 (already placed) ===
+    # Small platform extension for treasure
+    _fill_rect(g, 18, 4, 38, 4, Tile.DIRT)  # extend floor right
+    g.set(35, 5, Tile.CHEST)
+    g.set(25, 5, Tile.SPIKE)
+    g.set(28, 5, Tile.SPIKE)
+
+    # Ladder: level 4 back up to level 3
+    for y in range(5, 11):
+        g.set(20, y, Tile.LADDER)
 
     return g

@@ -215,24 +215,29 @@ def test_known_spike_low_ceiling():
 
 
 def test_known_spike_game_map_geometry():
-    """Reproduce the actual game map: spike at y=10, ceiling at y=13."""
-    from dungeon.grid import make_room_slice
-    grid = make_room_slice()
-    vault = Vault()
+    """Test spike hopping in a corridor matching game map ceiling height."""
+    # Build a simple corridor with game-map proportions (3 tiles headroom)
+    g = Grid(20, 10)
+    for x in range(20):
+        g.set(x, 0, Tile.DIRT)   # floor
+        g.set(x, 4, Tile.DIRT)   # ceiling (3 tiles headroom: y=1,2,3)
+    g.set(10, 1, Tile.SPIKE)
+    g.set(13, 1, Tile.SPIKE)
+    g.set(0, 1, Tile.ENTRANCE)
 
-    # Adventurer on middle floor heading right through spike gauntlet
-    adv = Adventurer(x=12.0, y=10.0, speed=3.5, hp=200, max_hp=200)
-    adv._entrance = (1, 14)
+    vault = Vault()
+    adv = Adventurer(x=5.0, y=1.0, speed=3.5, hp=200, max_hp=200)
+    adv._entrance = (0, 1)
     adv.grounded = True
-    adv._known_hazards = {(15, 10), (18, 10)}
-    _preseed_vision(adv, grid)
-    adv._path = [(x, 10) for x in range(13, 22)]
+    adv._known_hazards = {(10, 1), (13, 1)}
+    _preseed_vision(adv, g)
+    adv._path = [(x, 1) for x in range(6, 18)]
     adv._path_index = 0
     adv._path_dirty = False
 
-    _walk_adventurer(adv, grid, vault, 8.0)
+    _walk_adventurer(adv, g, vault, 8.0)
 
-    assert adv.hp == 200, f"Game map spikes should be cleared, hp={adv.hp}, log={adv.damage_log}"
+    assert adv.hp == 200, f"Corridor spikes should be cleared, hp={adv.hp}, log={adv.damage_log}"
 
 
 def test_return_trip_slow():
@@ -251,3 +256,51 @@ def test_return_trip_slow():
     _walk_adventurer(adv, grid, vault, 8.0)
 
     assert adv.hp == 200, f"Slow return should clear spike, hp={adv.hp}, log={adv.damage_log}"
+
+
+def _make_spike_ladder_corridor(spike_x: int = 10, ladder_x: int = 11) -> Grid:
+    """Corridor with a spike immediately before a ladder."""
+    g = Grid(20, 15)
+    for x in range(20):
+        g.set(x, 0, Tile.DIRT)  # floor
+    g.set(spike_x, 1, Tile.SPIKE)
+    for y in range(1, 8):
+        g.set(ladder_x, y, Tile.LADDER)
+    g.set(0, 1, Tile.ENTRANCE)
+    return g
+
+
+def _walk_and_track(adv, grid, vault, seconds, dt=1/60):
+    """Walk adventurer and track hop count and peak Y."""
+    hop_count = 0
+    peak_y = adv.y
+    for _ in range(int(seconds / dt)):
+        old_vy = adv.vy
+        old_grounded = adv.grounded
+        update_adventurer(adv, grid, vault, dt)
+        if adv.y > peak_y:
+            peak_y = adv.y
+        if old_vy <= 0 and adv.vy > 0 and old_grounded:
+            hop_count += 1
+    return hop_count, peak_y
+
+
+def test_spike_before_ladder_right():
+    """Walking right through spike then up ladder — no damage, reaches ladder."""
+    for speed in (4.0, 3.5):
+        grid = _make_spike_ladder_corridor(spike_x=10, ladder_x=11)
+        vault = Vault()
+        adv = Adventurer(x=7.0, y=1.0, speed=speed, hp=200, max_hp=200)
+        adv._entrance = (0, 1)
+        adv.grounded = True
+        adv._known_hazards = {(10, 1)}
+        _preseed_vision(adv, grid)
+        adv._path = [(x, 1) for x in range(8, 12)] + [(11, y) for y in range(2, 8)]
+        adv._path_index = 0
+        adv._path_dirty = False
+
+        hops, peak_y = _walk_and_track(adv, grid, vault, 4.0)
+
+        assert adv.hp == 200, f"speed={speed}: should clear spike, hp={adv.hp}, log={adv.damage_log}"
+        assert peak_y >= 3.0, f"speed={speed}: should have climbed ladder, peak_y={peak_y:.1f}"
+        assert hops <= 2, f"speed={speed}: infinite-hop, hopped {hops} times"

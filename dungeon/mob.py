@@ -10,6 +10,7 @@ from dungeon.grid import Grid, Tile
 
 SPIKE_DAMAGE_TO_MOB = 20
 AGGRO_RANGE = 4.0  # tiles — distance to spot and chase an adventurer
+RESPAWN_TIME = 30.0  # seconds before a dead mob respawns
 
 
 class MobType(Enum):
@@ -20,7 +21,7 @@ class MobType(Enum):
 MOB_STATS: dict[MobType, dict[str, int | float]] = {
     MobType.SLIME: {
         "hp": 60, "max_hp": 60, "attack": 15, "defense": 0,
-        "speed": 2.0, "attack_speed": 1.0,
+        "speed": 2.0, "attack_speed": 1.0, "attack_range": 1.2,
     },
 }
 
@@ -31,10 +32,25 @@ class Mob(Entity):
     direction: float = 1.0  # 1.0 = right, -1.0 = left
     _hazard_cooldown: float = 0.0
     _home_x: float = 0.0  # patrol origin, returns here after combat
+    _respawn_timer: float = 0.0  # counts down to respawn when dead
 
     def __post_init__(self) -> None:
         self.faction = Faction.DUNGEON
         self._home_x = self.x
+
+    def take_damage(self, amount: int) -> int:
+        was_alive = self.alive
+        actual = super().take_damage(amount)
+        if was_alive and not self.alive:
+            self._respawn_timer = RESPAWN_TIME
+        return actual
+
+    @property
+    def respawn_progress(self) -> float:
+        """0.0 = just died, 1.0 = about to respawn."""
+        if self.alive or self._respawn_timer <= 0:
+            return 0.0
+        return 1.0 - self._respawn_timer / RESPAWN_TIME
 
 
 def make_mob(x: float, y: float, mob_type: MobType = MobType.SLIME) -> Mob:
@@ -44,28 +60,38 @@ def make_mob(x: float, y: float, mob_type: MobType = MobType.SLIME) -> Mob:
     return mob
 
 
-def update_mob(mob: Mob, grid: Grid, dt: float) -> None:
-    """Advance mob by dt seconds. Patrols, chases, fights."""
+def update_mob(mob: Mob, grid: Grid, dt: float) -> int:
+    """Advance mob by dt seconds. Returns mana generated from combat."""
     if not mob.alive:
-        return
+        if mob._respawn_timer > 0:
+            mob._respawn_timer -= dt
+            if mob._respawn_timer <= 0:
+                # Respawn at home position
+                stats = MOB_STATS.get(mob.mob_type, {})
+                mob.hp = stats.get("max_hp", mob.max_hp)
+                mob.alive = True
+                mob.x = mob._home_x
+                mob._respawn_timer = 0.0
+        return 0
 
+    mana = 0
     mob._damage_flash = max(0.0, mob._damage_flash - dt)
 
     # Combat: stand and fight
     if mob.in_combat:
         target = mob._combat_target
-        if not target.alive or abs(mob.x - target.x) + abs(mob.y - target.y) > AGGRO_RANGE:
+        if not target.alive or abs(mob.x - target.x) + abs(mob.y - target.y) > mob.attack_range + 0.5:
             mob.disengage()
         else:
             dmg = mob.try_attack(dt)
             if dmg > 0:
-                target.take_damage(dmg)
+                mana += target.take_damage(dmg)
             # Face target
             if target.x > mob.x:
                 mob.direction = 1.0
             elif target.x < mob.x:
                 mob.direction = -1.0
-            return  # no movement while fighting
+            return mana  # no movement while fighting
 
     # Gravity
     mob.vy += GRAVITY * dt
@@ -99,3 +125,4 @@ def update_mob(mob: Mob, grid: Grid, dt: float) -> None:
         if mob._hazard_cooldown <= 0:
             mob.take_damage(SPIKE_DAMAGE_TO_MOB)
             mob._hazard_cooldown = 1.0
+    return mana

@@ -40,20 +40,24 @@ class AdventurerClass(Enum):
 CLASS_STATS: dict[AdventurerClass, dict[str, int | float]] = {
     AdventurerClass.WARRIOR: {
         "hp": 120, "max_hp": 120, "attack": 15, "defense": 3,
-        "speed": 3.5, "attack_speed": 0.8, "stamina": 120.0, "max_stamina": 120.0,
+        "speed": 3.5, "attack_speed": 0.8, "attack_range": 1.5,
+        "stamina": 120.0, "max_stamina": 120.0,
     },
     AdventurerClass.ROGUE: {
         "hp": 80, "max_hp": 80, "attack": 12, "defense": 1,
-        "speed": 5.0, "attack_speed": 1.5, "stamina": 100.0, "max_stamina": 100.0,
+        "speed": 5.0, "attack_speed": 1.5, "attack_range": 1.5,
+        "stamina": 100.0, "max_stamina": 100.0,
     },
     AdventurerClass.MAGE: {
         "hp": 70, "max_hp": 70, "attack": 8, "defense": 0,
-        "speed": 3.5, "attack_speed": 0.7, "stamina": 60.0, "max_stamina": 60.0,
+        "speed": 3.5, "attack_speed": 0.7, "attack_range": 3.5,
+        "stamina": 60.0, "max_stamina": 60.0,
         "mana": 100.0, "max_mana": 100.0,
     },
     AdventurerClass.HEALER: {
         "hp": 90, "max_hp": 90, "attack": 8, "defense": 2,
-        "speed": 3.5, "attack_speed": 0.8, "stamina": 80.0, "max_stamina": 80.0,
+        "speed": 3.5, "attack_speed": 0.8, "attack_range": 3.0,
+        "stamina": 80.0, "max_stamina": 80.0,
         "mana": 80.0, "max_mana": 80.0,
     },
 }
@@ -83,6 +87,8 @@ class Adventurer(Entity):
     _greed: float = GREED_START
     _known_hazards: set[tuple[int, int]] = field(default_factory=set)
     _hazard_hopping: bool = False  # True during a controlled spike hop
+    _party_speed: float | None = None  # if set, overrides speed for party cohesion
+    _approach_target: Entity | None = field(default=None, repr=False)  # mob to walk toward
 
     def __post_init__(self) -> None:
         self.faction = Faction.ADVENTURER
@@ -282,7 +288,11 @@ def _ensure_path(adv: Adventurer, grid: Grid, vault: Vault) -> None:
 
     _update_vision(adv, grid)
 
-    goal = _pick_goal(adv, grid, vault)
+    # If approaching a mob, override goal to mob's position
+    if adv._approach_target is not None and adv._approach_target.alive:
+        goal = (adv._approach_target.grid_x, adv._approach_target.grid_y)
+    else:
+        goal = _pick_goal(adv, grid, vault)
     if goal is None:
         adv._path = []
         adv._path_dirty = False
@@ -290,7 +300,10 @@ def _ensure_path(adv: Adventurer, grid: Grid, vault: Vault) -> None:
 
     adv._current_goal = goal
     start = (adv.grid_x, adv.grid_y)
-    adv._path = find_path(grid, start, goal)
+    # Try to route around known hazards; fall back to routing through them
+    adv._path = find_path(grid, start, goal, avoid=adv._known_hazards)
+    if not adv._path and adv._known_hazards:
+        adv._path = find_path(grid, start, goal)
     adv._path_index = 1 if len(adv._path) > 1 else 0
     adv._path_dirty = False
 
@@ -307,14 +320,32 @@ def update_adventurer(adv: Adventurer, grid: Grid, vault: Vault, dt: float) -> i
     if adv.in_combat:
         target = adv._combat_target
         # Disengage if target dead or too far
-        if not target.alive or abs(adv.x - target.x) + abs(adv.y - target.y) > 3.0:
+        if not target.alive or abs(adv.x - target.x) + abs(adv.y - target.y) > adv.attack_range + 0.5:
             adv.disengage()
+            adv._approach_target = None
             adv._path_dirty = True
         else:
             dmg = adv.try_attack(dt)
             if dmg > 0:
                 target.take_damage(dmg)
             return mana  # no movement while fighting
+
+    # --- Approaching a mob: engage when in range ---
+    if adv._approach_target is not None:
+        at = adv._approach_target
+        if not at.alive:
+            adv._approach_target = None
+            adv._path_dirty = True
+        else:
+            dist = abs(adv.x - at.x) + abs(adv.y - at.y)
+            if dist <= adv.attack_range:
+                adv.engage(at)
+                adv._approach_target = None
+                return mana
+            # Re-path if mob moved
+            mob_tile = (at.grid_x, at.grid_y)
+            if adv._current_goal != mob_tile:
+                adv._path_dirty = True
 
     # --- Looting animation ---
     if adv.looting:
@@ -335,6 +366,9 @@ def update_adventurer(adv: Adventurer, grid: Grid, vault: Vault, dt: float) -> i
     # --- Pathfinding ---
     _ensure_path(adv, grid, vault)
 
+    # --- Effective speed (party cohesion may override) ---
+    eff_speed = adv._party_speed if adv._party_speed is not None else adv.speed
+
     # --- Determine movement target ---
     target_x: float | None = None
     target_y: float | None = None
@@ -353,6 +387,11 @@ def update_adventurer(adv: Adventurer, grid: Grid, vault: Vault, dt: float) -> i
         elif not adv.grounded:
             # Airborne: advance waypoints on x alone (don't stall mid-air)
             reached = abs(dx) <= WAYPOINT_THRESHOLD
+            # Don't skip past vertical-climb waypoints (ladders) while airborne
+            if reached and adv._path_index + 1 < len(adv._path):
+                next_tx, next_ty = adv._path[adv._path_index + 1]
+                if next_tx == tx and next_ty > ty:
+                    reached = False
         else:
             reached = abs(dx) <= WAYPOINT_THRESHOLD and abs(dy) <= WAYPOINT_THRESHOLD
         if reached:
@@ -369,7 +408,7 @@ def update_adventurer(adv: Adventurer, grid: Grid, vault: Vault, dt: float) -> i
     if on_ladder and target_y is not None:
         # Climb toward target y
         dy_climb = target_y - adv.y
-        step = adv.speed * dt
+        step = eff_speed * dt
         if abs(dy_climb) > step:
             climb_dir = 1.0 if dy_climb > 0 else -1.0
             adv.y += climb_dir * step
@@ -401,13 +440,14 @@ def update_adventurer(adv: Adventurer, grid: Grid, vault: Vault, dt: float) -> i
 
     # --- Horizontal movement toward target (suppressed while actively climbing) ---
     climbing = on_ladder and target_y is not None and abs(target_y - adv.y) > 0.3
+    pre_move_gx = adv.grid_x  # save for hop check (movement can shift grid_x onto spike)
     if target_x is not None and not climbing:
         dx = target_x - adv.x
         need_drop = target_y is not None and target_y < adv.y - 0.3
 
         if abs(dx) > 0.05 or (need_drop and adv.grounded):
             move_dir = 1.0 if dx >= 0 else -1.0
-            new_x = adv.x + move_dir * adv.speed * dt
+            new_x = adv.x + move_dir * eff_speed * dt
 
             ahead_x = int(new_x + 0.3 * move_dir)
             if grid.is_solid(ahead_x, adv.grid_y):
@@ -421,9 +461,10 @@ def update_adventurer(adv: Adventurer, grid: Grid, vault: Vault, dt: float) -> i
             adv.x = target_x
 
         # Hop over known hazards — controlled hop, no fall damage
-        if adv.grounded and adv._known_hazards:
-            move_dir_i = 1 if (target_x or adv.x) >= adv.x else -1
-            ahead_tile = (adv.grid_x + move_dir_i, adv.grid_y)
+        # Use pre-movement grid_x so we detect the spike BEFORE stepping onto it
+        if adv.grounded and adv._known_hazards and target_x is not None:
+            move_dir_i = 1 if target_x >= adv.x else -1
+            ahead_tile = (pre_move_gx + move_dir_i, adv.grid_y)
             if ahead_tile in adv._known_hazards:
                 adv.vy = HAZARD_HOP_FORCE
                 adv._hazard_hopping = True
