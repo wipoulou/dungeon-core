@@ -5,13 +5,14 @@ from __future__ import annotations
 import random
 from collections import deque
 from dataclasses import dataclass, field
+from enum import Enum
 
+from dungeon.entity import Entity, Faction, GRAVITY
 from dungeon.grid import Grid, Tile
 from dungeon.log import log
 from dungeon.loot import Vault
 from dungeon.pathfinding import _can_stand, _neighbors, _on_ladder, find_path
 
-GRAVITY = -20.0
 SPIKE_DAMAGE = 30
 WAYPOINT_THRESHOLD = 0.3
 STUCK_TIME = 2.0
@@ -24,20 +25,43 @@ GREED_PER_CHEST = 0.35   # greed lost per chest looted
 GREED_PER_DAMAGE = 0.10  # greed lost per damage event
 FLEE_HP_THRESHOLD = 0.5   # below this HP fraction, adventurer wants out
 SPIKE_FALL_MULTIPLIER = 1.5  # extra damage when landing on spike from air
-SPIKE_HEIGHT = 0.1  # spikes only occupy the bottom 0.1 of a tile
+HAZARD_HOP_FORCE = 7.0  # hop to clear spikes — sized to fit under low ceilings
+MANA_PER_DAMAGE = 0.5  # mana generated per point of damage taken
+
+
+class AdventurerClass(Enum):
+    WARRIOR = "warrior"
+    ROGUE = "rogue"
+    MAGE = "mage"
+    HEALER = "healer"
+
+
+# Base stat overrides per class: (hp, attack, defense, speed, attack_speed, stamina, mana)
+CLASS_STATS: dict[AdventurerClass, dict[str, int | float]] = {
+    AdventurerClass.WARRIOR: {
+        "hp": 120, "max_hp": 120, "attack": 15, "defense": 3,
+        "speed": 3.5, "attack_speed": 0.8, "stamina": 120.0, "max_stamina": 120.0,
+    },
+    AdventurerClass.ROGUE: {
+        "hp": 80, "max_hp": 80, "attack": 12, "defense": 1,
+        "speed": 5.0, "attack_speed": 1.5, "stamina": 100.0, "max_stamina": 100.0,
+    },
+    AdventurerClass.MAGE: {
+        "hp": 70, "max_hp": 70, "attack": 8, "defense": 0,
+        "speed": 3.5, "attack_speed": 0.7, "stamina": 60.0, "max_stamina": 60.0,
+        "mana": 100.0, "max_mana": 100.0,
+    },
+    AdventurerClass.HEALER: {
+        "hp": 90, "max_hp": 90, "attack": 8, "defense": 2,
+        "speed": 3.5, "attack_speed": 0.8, "stamina": 80.0, "max_stamina": 80.0,
+        "mana": 80.0, "max_mana": 80.0,
+    },
+}
 
 
 @dataclass
-class Adventurer:
-    x: float
-    y: float
-    hp: int = 100
-    max_hp: int = 100
-    speed: float = 4.0
-    jump_force: float = 10.0
-    vy: float = 0.0
-    grounded: bool = False
-    alive: bool = True
+class Adventurer(Entity):
+    adv_class: AdventurerClass = AdventurerClass.WARRIOR
     reached_exit: bool = False
     looting: bool = False
     loot_timer: float = 0.0
@@ -45,7 +69,6 @@ class Adventurer:
     damage_log: list[int] = field(default_factory=list)
     _hazard_cooldown: float = 0.0
     _last_hazard_tile: tuple[int, int] | None = None
-    _damage_flash: float = 0.0
     _path: list[tuple[int, int]] = field(default_factory=list)
     _path_index: int = 0
     _path_dirty: bool = True
@@ -57,33 +80,44 @@ class Adventurer:
     _entrance: tuple[int, int] | None = None
     _returning: bool = False
     _known_chests: set[tuple[int, int]] = field(default_factory=set)
-    _greed: float = GREED_START  # desire to keep exploring (0 = wants to leave)
-    _known_hazards: set[tuple[int, int]] = field(default_factory=set)  # traps discovered by walking into them
+    _greed: float = GREED_START
+    _known_hazards: set[tuple[int, int]] = field(default_factory=set)
+    _hazard_hopping: bool = False  # True during a controlled spike hop
 
-    @property
-    def grid_x(self) -> int:
-        return int(self.x)
-
-    @property
-    def grid_y(self) -> int:
-        return int(self.y)
+    def __post_init__(self) -> None:
+        self.faction = Faction.ADVENTURER
 
     def take_damage(self, amount: int) -> int:
-        """Apply damage and return mana generated (0.5x damage per GDD)."""
+        """Apply damage, drain greed, return mana generated."""
         if not self.alive:
             return 0
-        self.hp = max(0, self.hp - amount)
-        self.damage_log.append(amount)
+        actual = max(1, amount - self.defense)
+        self.hp = max(0, self.hp - actual)
+        self.damage_log.append(actual)
         self._damage_flash = 0.15
         self._greed = max(0.0, self._greed - GREED_PER_DAMAGE)
-        log(f"DAMAGE {amount} hp={self.hp}/{self.max_hp} greed={self._greed:.2f} pos=({self.grid_x},{self.grid_y})")
+        log(f"DAMAGE {actual} hp={self.hp}/{self.max_hp} greed={self._greed:.2f} pos=({self.grid_x},{self.grid_y})")
         if self.hp <= 0:
             self.alive = False
-        return int(amount * 0.5)
+            self.disengage()
+        return int(actual * MANA_PER_DAMAGE)
 
     @property
     def total_damage_taken(self) -> int:
         return sum(self.damage_log)
+
+
+def make_adventurer(
+    x: float, y: float, adv_class: AdventurerClass = AdventurerClass.WARRIOR,
+    entrance: tuple[int, int] | None = None,
+) -> Adventurer:
+    """Create an adventurer with class-based stats."""
+    stats = CLASS_STATS.get(adv_class, {})
+    adv = Adventurer(
+        x=x, y=y, adv_class=adv_class, _entrance=entrance,
+        **stats,
+    )
+    return adv
 
 
 def _update_vision(adv: Adventurer, grid: Grid) -> None:
@@ -269,6 +303,19 @@ def update_adventurer(adv: Adventurer, grid: Grid, vault: Vault, dt: float) -> i
     mana = 0
     adv._damage_flash = max(0.0, adv._damage_flash - dt)
 
+    # --- Combat: stand and fight ---
+    if adv.in_combat:
+        target = adv._combat_target
+        # Disengage if target dead or too far
+        if not target.alive or abs(adv.x - target.x) + abs(adv.y - target.y) > 3.0:
+            adv.disengage()
+            adv._path_dirty = True
+        else:
+            dmg = adv.try_attack(dt)
+            if dmg > 0:
+                target.take_damage(dmg)
+            return mana  # no movement while fighting
+
     # --- Looting animation ---
     if adv.looting:
         adv.loot_timer += dt
@@ -342,7 +389,8 @@ def update_adventurer(adv: Adventurer, grid: Grid, vault: Vault, dt: float) -> i
 
         feet_tile_y = int(new_y)
         if grid.is_solid(adv.grid_x, feet_tile_y):
-            landed_hard = adv.vy < -3.0  # was falling fast
+            landed_hard = adv.vy < -3.0 and not adv._hazard_hopping
+            adv._hazard_hopping = False
             adv.y = feet_tile_y + 1.0
             adv.vy = 0.0
             adv.grounded = True
@@ -372,12 +420,13 @@ def update_adventurer(adv: Adventurer, grid: Grid, vault: Vault, dt: float) -> i
             # Don't snap while airborne — keep horizontal momentum
             adv.x = target_x
 
-        # Jump over known hazards (1 tile ahead — don't bounce on discovery)
+        # Hop over known hazards — controlled hop, no fall damage
         if adv.grounded and adv._known_hazards:
             move_dir_i = 1 if (target_x or adv.x) >= adv.x else -1
             ahead_tile = (adv.grid_x + move_dir_i, adv.grid_y)
             if ahead_tile in adv._known_hazards:
-                adv.vy = adv.jump_force
+                adv.vy = HAZARD_HOP_FORCE
+                adv._hazard_hopping = True
 
         target_is_ladder = target_x is not None and target_y is not None and grid.get(int(target_x), int(target_y)) == Tile.LADDER
         if target_y is not None and target_y > adv.y + 0.5 and adv.grounded and not on_ladder and not target_is_ladder:

@@ -31,20 +31,25 @@ HOVER_PLACE_COLOR = rl.Color(100, 255, 100, 80)
 CHEST_EMPTY_COLOR = rl.Color(120, 100, 40, 255)
 FOG_COLOR = rl.Color(0, 0, 0, 160)
 
+MOB_COLOR = rl.Color(60, 180, 60, 255)
+MOB_DAMAGE_COLOR = rl.Color(255, 255, 255, 255)
+MOB_DEAD_COLOR = rl.Color(40, 80, 40, 120)
+
 # Tools
 TOOL_DIG = 0
 TOOL_CHEST = 1
 TOOL_SPIKE = 2
 TOOL_LADDER = 3
-tool_names = ["Dig/Place", "Chest", "Spike", "Ladder"]
+TOOL_SLIME = 4
+tool_names = ["Dig/Place", "Chest", "Spike", "Ladder", "Slime"]
 
 # -- Init --
 rl.init_window(SCREEN_W, SCREEN_H, "Dungeon Symbiosis")
 rl.set_target_fps(60)
 
 gs = new_game()
+gs.auto_spawn = True
 grid = gs.grid
-adv = gs.spawn_adventurer()
 current_tool = TOOL_DIG
 
 # Camera centered on grid
@@ -97,6 +102,8 @@ while not rl.window_should_close():
         current_tool = TOOL_SPIKE
     if rl.is_key_pressed(rl.KeyboardKey.KEY_FOUR):
         current_tool = TOOL_LADDER
+    if rl.is_key_pressed(rl.KeyboardKey.KEY_FIVE):
+        current_tool = TOOL_SLIME
     if rl.is_key_pressed(rl.KeyboardKey.KEY_F):
         show_fog = not show_fog
 
@@ -139,12 +146,21 @@ while not rl.window_should_close():
                 gs.place_ladder(hover_gx, hover_gy)
             if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_RIGHT):
                 gs.remove_ladder(hover_gx, hover_gy)
+        elif current_tool == TOOL_SLIME:
+            if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_LEFT):
+                gs.place_mob(hover_gx, hover_gy)
+            if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_RIGHT):
+                gs.remove_mob(hover_gx, hover_gy)
 
-    # Respawn
+    # Manual spawn party
     if rl.is_key_pressed(rl.KeyboardKey.KEY_R):
         log_dump()
         log_clear()
-        adv = gs.spawn_adventurer()
+        gs.spawn_party()
+
+    # Toggle auto-spawn
+    if rl.is_key_pressed(rl.KeyboardKey.KEY_A):
+        gs.auto_spawn = not gs.auto_spawn
 
     # -- Draw --
     rl.begin_drawing()
@@ -170,8 +186,14 @@ while not rl.window_should_close():
                 c = TILE_COLORS.get(tile)
             if c is None:
                 continue
-            r = world_rect(x, y)
-            rl.draw_rectangle_rec(r, c)
+            if tile == Tile.SPIKE:
+                # Spikes are short — only 0.1 tile height, sitting on the floor
+                wx, wy = world_pos(x, y)
+                spike_h = int(0.1 * TILE_SIZE)
+                rl.draw_rectangle(int(wx), int(wy - spike_h + TILE_SIZE), TILE_SIZE, spike_h, c)
+            else:
+                r = world_rect(x, y)
+                rl.draw_rectangle_rec(r, c)
 
     # Hover highlight
     if hover_in_bounds and my > HUD_HEIGHT:
@@ -194,6 +216,9 @@ while not rl.window_should_close():
                 rl.draw_rectangle_rec(r, rl.Color(160, 120, 60, 80))
             elif hover_tile == Tile.LADDER:
                 rl.draw_rectangle_rec(r, HOVER_DIG_COLOR)
+        elif current_tool == TOOL_SLIME:
+            if hover_tile in (Tile.EMPTY, Tile.SPIKE):
+                rl.draw_rectangle_rec(r, rl.Color(60, 180, 60, 80))
 
     # Fog of war — dim tiles no adventurer has seen
     if show_fog:
@@ -242,6 +267,28 @@ while not rl.window_should_close():
             bar_color = rl.GREEN if hp_frac > 0.5 else rl.YELLOW if hp_frac > 0.25 else rl.RED
             rl.draw_rectangle(bar_x, bar_y, int(bar_w * hp_frac), bar_h, bar_color)
 
+    # Mobs (slimes)
+    for m in gs.mobs:
+        if m.alive:
+            c = MOB_DAMAGE_COLOR if m._damage_flash > 0 else MOB_COLOR
+        else:
+            c = MOB_DEAD_COLOR
+        mx_w, my_w = world_pos(m.x, m.y)
+        rl.draw_rectangle(
+            int(mx_w), int(my_w),
+            int(0.8 * TILE_SIZE), int(0.6 * TILE_SIZE), c,
+        )
+        # HP bar
+        if m.alive and m.hp < m.max_hp:
+            bar_w = int(0.8 * TILE_SIZE)
+            bar_h = 3
+            bar_x = int(mx_w)
+            bar_y = int(my_w - 4)
+            hp_frac = m.hp / m.max_hp
+            rl.draw_rectangle(bar_x, bar_y, bar_w, bar_h, rl.Color(40, 40, 40, 200))
+            bar_color = rl.GREEN if hp_frac > 0.5 else rl.YELLOW if hp_frac > 0.25 else rl.RED
+            rl.draw_rectangle(bar_x, bar_y, int(bar_w * hp_frac), bar_h, bar_color)
+
     rl.end_mode_2d()
 
     # HUD
@@ -250,7 +297,8 @@ while not rl.window_should_close():
     rl.draw_text(f"Vault: {gs.vault.items}", 130, 10, 20, rl.GOLD)
 
     active = gs.active_adventurers
-    rl.draw_text(f"Adventurers: {len(active)}", 260, 10, 20, rl.WHITE)
+    rl.draw_text(f"Adv: {len(active)}", 260, 10, 20, rl.WHITE)
+    rl.draw_text(f"Wave: {gs._wave_count}", 350, 10, 20, rl.WHITE)
 
     # Tool indicator
     tool_text = f"[{current_tool + 1}] {tool_names[current_tool]}"
@@ -259,8 +307,9 @@ while not rl.window_should_close():
     status = "PAUSED" if paused else "RUNNING"
     rl.draw_text(status, SCREEN_W - 120, 10, 20, rl.YELLOW if paused else rl.GREEN)
 
-    if gs.is_complete and len(gs.adventurers) > 0:
-        rl.draw_text("[R] Spawn", SCREEN_W - 260, 10, 20, rl.WHITE)
+    auto_text = "Auto:ON" if gs.auto_spawn else "Auto:OFF"
+    auto_color = rl.GREEN if gs.auto_spawn else rl.GRAY
+    rl.draw_text(auto_text, SCREEN_W - 260, 10, 20, auto_color)
 
     # Debug: grid coords under mouse
     if hover_in_bounds:
@@ -272,7 +321,7 @@ while not rl.window_should_close():
 
     # Controls
     rl.draw_text(
-        "LMB/RMB: Tool | 1-4: Tool | Scroll: Zoom | Space: Pause | F: Fog | R: Spawn",
+        "LMB/RMB: Tool | 1-5: Tool | Scroll: Zoom | Space: Pause | F: Fog | R: Spawn | A: Auto",
         10, SCREEN_H - 25, 16, rl.Color(180, 180, 180, 255),
     )
 
