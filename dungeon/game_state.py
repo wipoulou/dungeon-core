@@ -18,10 +18,10 @@ class GameState:
     time_elapsed: float = 0.0
 
     def spawn_adventurer(self) -> Adventurer | None:
-        if self.grid.spawn_pos is None:
+        if self.grid.entrance_pos is None:
             return None
-        sx, sy = self.grid.spawn_pos
-        adv = Adventurer(x=float(sx), y=float(sy))
+        sx, sy = self.grid.entrance_pos
+        adv = Adventurer(x=float(sx), y=float(sy), _entrance=(sx, sy))
         self.adventurers.append(adv)
         return adv
 
@@ -69,6 +69,27 @@ class GameState:
         if not self.grid.is_solid(x, y - 1):
             return False
         self.grid.set(x, y, Tile.SPIKE)
+        self._invalidate_paths()
+        return True
+
+    def place_ladder(self, x: int, y: int) -> bool:
+        """Place a ladder. Can go on empty or replace dirt."""
+        if not self.grid.in_bounds(x, y):
+            return False
+        tile = self.grid.get(x, y)
+        if tile not in (Tile.EMPTY, Tile.DIRT):
+            return False
+        self.grid.set(x, y, Tile.LADDER)
+        self._invalidate_paths()
+        return True
+
+    def remove_ladder(self, x: int, y: int) -> bool:
+        """Remove a ladder."""
+        if not self.grid.in_bounds(x, y):
+            return False
+        if self.grid.get(x, y) != Tile.LADDER:
+            return False
+        self.grid.set(x, y, Tile.EMPTY)
         self._invalidate_paths()
         return True
 

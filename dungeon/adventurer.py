@@ -7,8 +7,9 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from dungeon.grid import Grid, Tile
+from dungeon.log import log
 from dungeon.loot import Vault
-from dungeon.pathfinding import _can_stand, find_path
+from dungeon.pathfinding import _can_stand, _neighbors, _on_ladder, find_path
 
 GRAVITY = -20.0
 SPIKE_DAMAGE = 30
@@ -18,6 +19,12 @@ LOOT_TIME = 0.8
 LOOT_MANA = 5
 VISION_RANGE = 5
 CHEST_DETOUR_RANGE = 10  # max BFS distance to consider a chest worth a detour
+GREED_START = 1.0
+GREED_PER_CHEST = 0.35   # greed lost per chest looted
+GREED_PER_DAMAGE = 0.10  # greed lost per damage event
+FLEE_HP_THRESHOLD = 0.5   # below this HP fraction, adventurer wants out
+SPIKE_FALL_MULTIPLIER = 1.5  # extra damage when landing on spike from air
+SPIKE_HEIGHT = 0.1  # spikes only occupy the bottom 0.1 of a tile
 
 
 @dataclass
@@ -47,9 +54,11 @@ class Adventurer:
     _current_goal: tuple[int, int] | None = None
     _looted_chests: set[tuple[int, int]] = field(default_factory=set)
     _seen: set[tuple[int, int]] = field(default_factory=set)
-    _known_exit: tuple[int, int] | None = None
+    _entrance: tuple[int, int] | None = None
+    _returning: bool = False
     _known_chests: set[tuple[int, int]] = field(default_factory=set)
-    # _known_hazards reserved for future use (leveled-up adventurers with trap detection)
+    _greed: float = GREED_START  # desire to keep exploring (0 = wants to leave)
+    _known_hazards: set[tuple[int, int]] = field(default_factory=set)  # traps discovered by walking into them
 
     @property
     def grid_x(self) -> int:
@@ -66,6 +75,8 @@ class Adventurer:
         self.hp = max(0, self.hp - amount)
         self.damage_log.append(amount)
         self._damage_flash = 0.15
+        self._greed = max(0.0, self._greed - GREED_PER_DAMAGE)
+        log(f"DAMAGE {amount} hp={self.hp}/{self.max_hp} greed={self._greed:.2f} pos=({self.grid_x},{self.grid_y})")
         if self.hp <= 0:
             self.alive = False
         return int(amount * 0.5)
@@ -88,9 +99,7 @@ def _update_vision(adv: Adventurer, grid: Grid) -> None:
 
         # Check for interesting things
         tile = grid.get(x, y)
-        if tile == Tile.EXIT:
-            adv._known_exit = (x, y)
-        elif tile == Tile.CHEST:
+        if tile == Tile.CHEST:
             adv._known_chests.add((x, y))
         # Traps are hidden — adventurers can't see them (until leveled up)
 
@@ -133,33 +142,12 @@ def _find_explore_target(adv: Adventurer, grid: Grid) -> tuple[int, int] | None:
                 if path:
                     return (x, y)
 
-        # Expand BFS through walkable tiles
-        grounded = grid.is_solid(x, y - 1)
-        for dx in (-1, 1):
-            nx = x + dx
-            if _can_stand(grid, nx, y) and (nx, y) not in visited:
-                if grounded or grid.is_solid(nx, y - 1):
-                    visited.add((nx, y))
-                    queue.append((nx, y))
-        # Up
-        if grounded and _can_stand(grid, x, y + 1) and (x, y + 1) not in visited:
-            visited.add((x, y + 1))
-            queue.append((x, y + 1))
-        # Down
-        if not grounded and _can_stand(grid, x, y - 1) and (x, y - 1) not in visited:
-            visited.add((x, y - 1))
-            queue.append((x, y - 1))
-        # Drop off edges
-        if grounded:
-            for dx in (-1, 1):
-                nx = x + dx
-                if _can_stand(grid, nx, y) and not grid.is_solid(nx, y - 1):
-                    land_y = y - 1
-                    while land_y > 0 and not grid.is_solid(nx, land_y - 1):
-                        land_y -= 1
-                    if _can_stand(grid, nx, land_y) and (nx, land_y) not in visited:
-                        visited.add((nx, land_y))
-                        queue.append((nx, land_y))
+        # Expand BFS through walkable tiles using shared movement rules
+        grounded = grid.is_solid(x, y - 1) or _on_ladder(grid, x, y)
+        for nx, ny in _neighbors(x, y, grounded, grid):
+            if (nx, ny) not in visited:
+                visited.add((nx, ny))
+                queue.append((nx, ny))
 
     return None  # Explored everything reachable
 
@@ -173,36 +161,16 @@ def _pick_wander_target(adv: Adventurer, grid: Grid) -> tuple[int, int] | None:
 
     while queue:
         x, y = queue.popleft()
-        grounded = grid.is_solid(x, y - 1)
-        for dx in (-1, 1):
-            nx = x + dx
-            if _can_stand(grid, nx, y) and (nx, y) not in visited:
-                if grounded or grid.is_solid(nx, y - 1):
-                    visited.add((nx, y))
-                    queue.append((nx, y))
-        if grounded and _can_stand(grid, x, y + 1) and (x, y + 1) not in visited:
-            visited.add((x, y + 1))
-            queue.append((x, y + 1))
-        if not grounded and _can_stand(grid, x, y - 1) and (x, y - 1) not in visited:
-            visited.add((x, y - 1))
-            queue.append((x, y - 1))
-        if grounded:
-            for dx in (-1, 1):
-                nx = x + dx
-                if _can_stand(grid, nx, y) and not grid.is_solid(nx, y - 1):
-                    land_y = y - 1
-                    while land_y > 0 and not grid.is_solid(nx, land_y - 1):
-                        land_y -= 1
-                    if _can_stand(grid, nx, land_y) and (nx, land_y) not in visited:
-                        visited.add((nx, land_y))
-                        queue.append((nx, land_y))
+        grounded = grid.is_solid(x, y - 1) or _on_ladder(grid, x, y)
+        for nx, ny in _neighbors(x, y, grounded, grid):
+            if (nx, ny) not in visited:
+                visited.add((nx, ny))
+                queue.append((nx, ny))
 
     visited.discard(pos)
     if not visited:
         return None
-    # Pick a random tile, biased toward farther ones
-    candidates = list(visited)
-    return random.choice(candidates)
+    return random.choice(list(visited))
 
 
 def _pick_goal(
@@ -210,44 +178,66 @@ def _pick_goal(
 ) -> tuple[int, int] | None:
     """Pick next goal. The adventurer always wants to be moving somewhere.
 
-    Priority:
-    1. Known exit — always the base goal once discovered
-    2. Nearby chest — quick detour if spotted and not too far
-    3. Explore — push toward the unknown to find the exit
+    Priority when exploring (greed > 0):
+    1. Nearby chest — quick detour if spotted and not too far
+    2. Explore — push toward the unknown
+    3. Wander — random reachable tile (keep moving while greedy)
+
+    When returning (greed depleted or nothing left to do):
+    - Head back to entrance
     """
     pos = (adv.grid_x, adv.grid_y)
 
-    # Check for nearby chests worth a detour
-    best_chest = None
-    best_dist = CHEST_DETOUR_RANGE + 1
-    stale = []
-    for cpos in adv._known_chests:
-        if cpos in adv._looted_chests:
-            continue
-        chest = vault.chests.get(cpos)
-        if chest is None or not chest.has_loot:
-            stale.append(cpos)
-            continue
-        path = find_path(grid, pos, cpos)
-        if path and len(path) < best_dist:
-            best_dist = len(path)
-            best_chest = cpos
-    for s in stale:
-        adv._known_chests.discard(s)
+    # Greed depleted or HP too low — head home
+    if adv._greed <= 0 or (adv.hp / adv.max_hp) < FLEE_HP_THRESHOLD:
+        if not adv._returning:
+            log(f"RETURN greed={adv._greed:.2f} hp={adv.hp}/{adv.max_hp} pos={pos}")
+        adv._returning = True
 
-    if best_chest is not None:
-        return best_chest
+    if not adv._returning:
+        # Check for nearby chests worth a detour
+        best_chest = None
+        best_dist = CHEST_DETOUR_RANGE + 1
+        stale = []
+        for cpos in adv._known_chests:
+            if cpos in adv._looted_chests:
+                continue
+            chest = vault.chests.get(cpos)
+            if chest is None or not chest.has_loot:
+                stale.append(cpos)
+                continue
+            path = find_path(grid, pos, cpos)
+            if path and len(path) < best_dist:
+                best_dist = len(path)
+                best_chest = cpos
+        for s in stale:
+            adv._known_chests.discard(s)
 
-    # Head to exit if known
-    if adv._known_exit is not None:
-        return adv._known_exit
+        if best_chest is not None:
+            log(f"GOAL chest={best_chest} pos={pos} greed={adv._greed:.2f}")
+            return best_chest
 
-    # No exit found yet — explore toward the unknown
-    explore = _find_explore_target(adv, grid)
-    if explore is not None:
-        return explore
+        # Explore toward the unknown
+        explore = _find_explore_target(adv, grid)
+        if explore is not None:
+            log(f"GOAL explore={explore} pos={pos} seen={len(adv._seen)}")
+            return explore
 
-    # Fully explored reachable area — wander to a random distant tile
+        # Seen everything reachable but still greedy — wander around
+        wander = _pick_wander_target(adv, grid)
+        if wander is not None:
+            log(f"GOAL wander={wander} pos={pos} seen={len(adv._seen)}")
+            return wander
+
+        # Truly nothing left to do — head back
+        log(f"RETURN nothing_left pos={pos} seen={len(adv._seen)} greed={adv._greed:.2f}")
+        adv._returning = True
+
+    # Return to entrance
+    if adv._entrance is not None:
+        return adv._entrance
+
+    # No entrance known (shouldn't happen) — wander
     return _pick_wander_target(adv, grid)
 
 
@@ -265,7 +255,8 @@ def _ensure_path(adv: Adventurer, grid: Grid, vault: Vault) -> None:
         return
 
     adv._current_goal = goal
-    adv._path = find_path(grid, (adv.grid_x, adv.grid_y), goal)
+    start = (adv.grid_x, adv.grid_y)
+    adv._path = find_path(grid, start, goal)
     adv._path_index = 1 if len(adv._path) > 1 else 0
     adv._path_dirty = False
 
@@ -312,35 +303,57 @@ def update_adventurer(adv: Adventurer, grid: Grid, vault: Vault, dt: float) -> i
         is_last = adv._path_index >= len(adv._path) - 1
         if is_last:
             reached = adv.grid_x == tx and abs(dy) < WAYPOINT_THRESHOLD
+        elif not adv.grounded:
+            # Airborne: advance waypoints on x alone (don't stall mid-air)
+            reached = abs(dx) <= WAYPOINT_THRESHOLD
         else:
-            reached = abs(dx) < WAYPOINT_THRESHOLD and abs(dy) < WAYPOINT_THRESHOLD
+            reached = abs(dx) <= WAYPOINT_THRESHOLD and abs(dy) <= WAYPOINT_THRESHOLD
         if reached:
             adv._path_index += 1
             if adv._path_index < len(adv._path):
                 tx, ty = adv._path[adv._path_index]
                 target_x, target_y = float(tx), float(ty)
 
-    # --- Gravity ---
-    adv.vy += GRAVITY * dt
-    new_y = adv.y + adv.vy * dt
+    # --- Ladder check ---
+    on_ladder = grid.get(adv.grid_x, adv.grid_y) == Tile.LADDER
+    landed_hard = False  # set by gravity block when landing from a fast fall
 
-    if adv.vy > 0:
-        head_y = int(new_y + 1.7)
-        if grid.is_solid(adv.grid_x, head_y):
-            adv.vy = 0.0
-            new_y = adv.y
-
-    feet_tile_y = int(new_y)
-    if grid.is_solid(adv.grid_x, feet_tile_y):
-        adv.y = feet_tile_y + 1.0
+    # --- Gravity (suppressed on ladders) ---
+    if on_ladder and target_y is not None:
+        # Climb toward target y
+        dy_climb = target_y - adv.y
+        step = adv.speed * dt
+        if abs(dy_climb) > step:
+            climb_dir = 1.0 if dy_climb > 0 else -1.0
+            adv.y += climb_dir * step
+        else:
+            adv.y = target_y  # snap when close to avoid overshooting
         adv.vy = 0.0
         adv.grounded = True
     else:
-        adv.y = new_y
-        adv.grounded = False
+        adv.vy += GRAVITY * dt
+        new_y = adv.y + adv.vy * dt
 
-    # --- Horizontal movement toward target ---
-    if target_x is not None:
+        if adv.vy > 0:
+            head_y = int(new_y + 1.7)
+            if grid.is_solid(adv.grid_x, head_y):
+                adv.vy = 0.0
+                new_y = adv.y
+
+        feet_tile_y = int(new_y)
+        if grid.is_solid(adv.grid_x, feet_tile_y):
+            landed_hard = adv.vy < -3.0  # was falling fast
+            adv.y = feet_tile_y + 1.0
+            adv.vy = 0.0
+            adv.grounded = True
+        else:
+            landed_hard = False
+            adv.y = new_y
+            adv.grounded = False
+
+    # --- Horizontal movement toward target (suppressed while actively climbing) ---
+    climbing = on_ladder and target_y is not None and abs(target_y - adv.y) > 0.3
+    if target_x is not None and not climbing:
         dx = target_x - adv.x
         need_drop = target_y is not None and target_y < adv.y - 0.3
 
@@ -354,9 +367,25 @@ def update_adventurer(adv: Adventurer, grid: Grid, vault: Vault, dt: float) -> i
                     adv.vy = adv.jump_force
             else:
                 adv.x = new_x
+        elif adv.grounded:
+            # Snap to target x to avoid int() truncation leaving us off-grid
+            # Don't snap while airborne — keep horizontal momentum
+            adv.x = target_x
 
-        if target_y is not None and target_y > adv.y + 0.5 and adv.grounded:
+        # Jump over known hazards (1 tile ahead — don't bounce on discovery)
+        if adv.grounded and adv._known_hazards:
+            move_dir_i = 1 if (target_x or adv.x) >= adv.x else -1
+            ahead_tile = (adv.grid_x + move_dir_i, adv.grid_y)
+            if ahead_tile in adv._known_hazards:
+                adv.vy = adv.jump_force
+
+        target_is_ladder = target_x is not None and target_y is not None and grid.get(int(target_x), int(target_y)) == Tile.LADDER
+        if target_y is not None and target_y > adv.y + 0.5 and adv.grounded and not on_ladder and not target_is_ladder:
             adv.vy = adv.jump_force
+
+    # --- Sanity: detect if adventurer is inside a solid tile ---
+    if grid.is_solid(adv.grid_x, adv.grid_y):
+        log(f"BUG solid! pos=({adv.x:.3f},{adv.y:.3f}) grid=({adv.grid_x},{adv.grid_y}) on_ladder={on_ladder} target=({target_x},{target_y}) vy={adv.vy:.2f}")
 
     # --- Chest interaction ---
     current_tile = (adv.grid_x, adv.grid_y)
@@ -366,6 +395,7 @@ def update_adventurer(adv: Adventurer, grid: Grid, vault: Vault, dt: float) -> i
             adv.loot_timer = 0.0
             adv.loot_collected += 1
             adv._looted_chests.add(current_tile)
+            adv._greed = max(0.0, adv._greed - GREED_PER_CHEST)
             mana += LOOT_MANA
         else:
             # Chest is empty — mark as looted so we don't keep targeting it
@@ -375,11 +405,21 @@ def update_adventurer(adv: Adventurer, grid: Grid, vault: Vault, dt: float) -> i
     # --- Hazard check ---
     adv._hazard_cooldown = max(0.0, adv._hazard_cooldown - dt)
     if grid.is_hazard(*current_tile):
-        new_hazard = current_tile != adv._last_hazard_tile
-        if adv._hazard_cooldown <= 0 or new_hazard:
-            mana += adv.take_damage(SPIKE_DAMAGE)
-            adv._hazard_cooldown = 1.0
-            adv._last_hazard_tile = current_tile
+        # Spikes only trigger when grounded and not jumping away
+        if not adv.grounded or adv.vy > 0:
+            pass
+        else:
+            new_hazard = current_tile != adv._last_hazard_tile
+            if adv._hazard_cooldown <= 0 or new_hazard:
+                damage = SPIKE_DAMAGE
+                if landed_hard:
+                    # Falling onto a spike hurts more
+                    damage = int(damage * SPIKE_FALL_MULTIPLIER)
+                mana += adv.take_damage(damage)
+                adv._hazard_cooldown = 1.0
+                adv._last_hazard_tile = current_tile
+                adv._known_hazards.add(current_tile)
+                adv._path_dirty = True  # rethink path now that we know about this trap
 
     # --- Stuck detection ---
     if current_tile == adv._last_grid_pos:
@@ -391,8 +431,8 @@ def update_adventurer(adv: Adventurer, grid: Grid, vault: Vault, dt: float) -> i
         adv._last_grid_pos = current_tile
         adv._stuck_timer = 0.0
 
-    # --- Exit check ---
-    if grid.get(adv.grid_x, adv.grid_y) == Tile.EXIT:
+    # --- Exit check (return to entrance) ---
+    if adv._returning and grid.get(adv.grid_x, adv.grid_y) == Tile.ENTRANCE:
         adv.reached_exit = True
 
     return mana

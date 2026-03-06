@@ -52,9 +52,9 @@ def test_drop_down():
 
 def test_room_slice_has_path():
     g = make_room_slice()
-    assert g.spawn_pos is not None
-    assert g.exit_pos is not None
-    path = find_path(g, g.spawn_pos, g.exit_pos)
-    assert len(path) > 0, "Room slice must have a valid path from spawn to exit"
-    assert path[0] == g.spawn_pos
-    assert path[-1] == g.exit_pos
+    assert g.entrance_pos is not None
+    # Path from entrance down to bottom floor and back
+    path_down = find_path(g, g.entrance_pos, (20, 6))
+    assert len(path_down) > 0, "Room slice must have a path from entrance to bottom"
+    path_up = find_path(g, (20, 6), g.entrance_pos)
+    assert len(path_up) > 0, "Room slice must have a path from bottom back to entrance"

@@ -6,7 +6,7 @@ def test_spawn_adventurer():
     gs = new_game()
     adv = gs.spawn_adventurer()
     assert adv is not None
-    sx, sy = gs.grid.spawn_pos
+    sx, sy = gs.grid.entrance_pos
     assert adv.x == float(sx)
     assert adv.y == float(sy)
     assert len(gs.adventurers) == 1
@@ -39,8 +39,8 @@ def test_dig_removes_dirt():
 
 def test_dig_non_dirt_fails():
     gs = new_game()
-    sx, sy = gs.grid.spawn_pos
-    assert not gs.dig(sx, sy)  # can't dig spawn
+    sx, sy = gs.grid.entrance_pos
+    assert not gs.dig(sx, sy)  # can't dig entrance
 
 
 def test_place_on_empty():

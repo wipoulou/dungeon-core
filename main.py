@@ -4,6 +4,7 @@ import pyray as rl
 
 from dungeon.game_state import new_game
 from dungeon.grid import Tile
+from dungeon.log import clear as log_clear, dump as log_dump
 
 # -- Constants --
 SCREEN_W, SCREEN_H = 960, 600
@@ -12,10 +13,10 @@ HUD_HEIGHT = 40
 
 TILE_COLORS = {
     Tile.DIRT: rl.Color(100, 70, 50, 255),
-    Tile.SPAWN: rl.Color(50, 180, 80, 255),
-    Tile.EXIT: rl.Color(50, 150, 220, 255),
+    Tile.ENTRANCE: rl.Color(50, 180, 120, 255),
     Tile.SPIKE: rl.Color(200, 40, 40, 255),
     Tile.CHEST: rl.Color(200, 170, 50, 255),
+    Tile.LADDER: rl.Color(160, 120, 60, 255),
 }
 BG_COLOR = rl.Color(20, 20, 30, 255)
 GRID_LINE_COLOR = rl.Color(255, 255, 255, 15)
@@ -34,7 +35,8 @@ FOG_COLOR = rl.Color(0, 0, 0, 160)
 TOOL_DIG = 0
 TOOL_CHEST = 1
 TOOL_SPIKE = 2
-tool_names = ["Dig/Place", "Chest", "Spike"]
+TOOL_LADDER = 3
+tool_names = ["Dig/Place", "Chest", "Spike", "Ladder"]
 
 # -- Init --
 rl.init_window(SCREEN_W, SCREEN_H, "Dungeon Symbiosis")
@@ -93,6 +95,8 @@ while not rl.window_should_close():
         current_tool = TOOL_CHEST
     if rl.is_key_pressed(rl.KeyboardKey.KEY_THREE):
         current_tool = TOOL_SPIKE
+    if rl.is_key_pressed(rl.KeyboardKey.KEY_FOUR):
+        current_tool = TOOL_LADDER
     if rl.is_key_pressed(rl.KeyboardKey.KEY_F):
         show_fog = not show_fog
 
@@ -130,9 +134,16 @@ while not rl.window_should_close():
                 gs.place_spike(hover_gx, hover_gy)
             if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_RIGHT):
                 gs.remove_spike(hover_gx, hover_gy)
+        elif current_tool == TOOL_LADDER:
+            if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_LEFT):
+                gs.place_ladder(hover_gx, hover_gy)
+            if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_RIGHT):
+                gs.remove_ladder(hover_gx, hover_gy)
 
     # Respawn
     if rl.is_key_pressed(rl.KeyboardKey.KEY_R):
+        log_dump()
+        log_clear()
         adv = gs.spawn_adventurer()
 
     # -- Draw --
@@ -177,6 +188,11 @@ while not rl.window_should_close():
             if hover_tile == Tile.EMPTY:
                 rl.draw_rectangle_rec(r, rl.Color(200, 40, 40, 80))
             elif hover_tile == Tile.SPIKE:
+                rl.draw_rectangle_rec(r, HOVER_DIG_COLOR)
+        elif current_tool == TOOL_LADDER:
+            if hover_tile in (Tile.EMPTY, Tile.DIRT):
+                rl.draw_rectangle_rec(r, rl.Color(160, 120, 60, 80))
+            elif hover_tile == Tile.LADDER:
                 rl.draw_rectangle_rec(r, HOVER_DIG_COLOR)
 
     # Fog of war — dim tiles no adventurer has seen
@@ -256,10 +272,11 @@ while not rl.window_should_close():
 
     # Controls
     rl.draw_text(
-        "LMB/RMB: Tool | 1-3: Tool | Scroll: Zoom | Space: Pause | F: Fog | R: Spawn",
+        "LMB/RMB: Tool | 1-4: Tool | Scroll: Zoom | Space: Pause | F: Fog | R: Spawn",
         10, SCREEN_H - 25, 16, rl.Color(180, 180, 180, 255),
     )
 
     rl.end_drawing()
 
+log_dump()
 rl.close_window()
