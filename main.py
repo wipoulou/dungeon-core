@@ -1,12 +1,19 @@
 """Dungeon Symbiosis - Room Slice Prototype"""
 
+import sys
 import pyray as rl
 
 from dungeon.adventurer import AdventurerClass
 from dungeon.game_state import new_game
 from dungeon.grid import Tile
-from dungeon.log import clear as log_clear, dump as log_dump
+from dungeon.log import clear as log_clear, dump as log_dump, set_debug, get_logger
 from dungeon.mob import MobType
+
+# --debug flag enables DEBUG-level logging to stderr
+if "--debug" in sys.argv:
+    set_debug(True)
+
+_log = get_logger("main")
 
 # -- Constants --
 SCREEN_W, SCREEN_H = 960, 600
